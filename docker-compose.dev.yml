@@ -1,0 +1,77 @@
+# Development docker-compose - builds from local source
+# Usage: docker compose -f docker-compose.dev.yml up -d --build
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: quadvault-redis-dev
+    restart: always
+    command: redis-server --appendonly yes --appendfsync everysec
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_dev:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  quadvault:
+    build: 
+      context: ./app
+      target: development
+    container_name: quadvault-dev
+    restart: always
+    privileged: true  # Required for mounting /dev/sdX inside container
+    network_mode: host
+    environment:
+      - NODE_ENV=development
+      - REDIS_URL=redis://localhost:6379
+    volumes:
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
+      - network_share:/mnt/network_share
+      - ./config.json:/app/config.json
+      - ./storage-cache.json:/app/storage-cache.json
+      # Mount source for hot reload in dev mode
+      - ./app:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: quadvault-worker-dev
+    restart: always
+    privileged: true  # Required for mounting /dev/sdX inside container
+    network_mode: host
+    environment:
+      - NODE_ENV=development
+      - REDIS_URL=redis://localhost:6379
+      - FRONTEND_URL=http://localhost:3000
+    volumes:
+      - /dev:/dev
+      - /run/udev:/run/udev:ro
+      - network_share:/mnt/network_share
+      - ./app/lib:/app/lib:ro
+      - ./config.json:/app/config.json:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      quadvault:
+        condition: service_started
+
+volumes:
+  redis_data_dev:
+    driver: local
+  network_share:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: "${SMB_SERVER}"
+      o: "username=${SMB_USER},password=${SMB_PASS},vers=3.0,file_mode=0777,dir_mode=0777"

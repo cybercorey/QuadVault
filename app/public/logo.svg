@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 48 48" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="gradient1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#7c3aed;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="gradient2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#a78bfa;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#8b5cf6;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- USB connector shape -->
+  <rect x="18" y="8" width="12" height="4" rx="1" fill="url(#gradient1)"/>
+  <path d="M22 12 L22 18 M26 12 L26 18" stroke="url(#gradient1)" stroke-width="2" stroke-linecap="round"/>
+  
+  <!-- Main body -->
+  <rect x="14" y="18" width="20" height="18" rx="3" fill="#1a1a2e" stroke="url(#gradient1)" stroke-width="2"/>
+  
+  <!-- Circular automation arrows -->
+  <circle cx="24" cy="27" r="5" fill="none" stroke="url(#gradient2)" stroke-width="1.5" stroke-dasharray="2 2"/>
+  <path d="M 28 24 L 30 24 L 29 22 M 20 30 L 18 30 L 19 32" fill="url(#gradient2)"/>
+  
+  <!-- Connection dots -->
+  <circle cx="20" cy="27" r="1.5" fill="#8b5cf6"/>
+  <circle cx="28" cy="27" r="1.5" fill="#7c3aed"/>
+  
+  <!-- Lightning bolt (speed/automation) -->
+  <path d="M 24 21 L 22 27 L 25 27 L 23 33" stroke="#a78bfa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  
+  <!-- Base connector -->
+  <rect x="20" y="36" width="8" height="6" rx="1" fill="url(#gradient1)"/>
+  <rect x="22" y="42" width="4" height="2" rx="0.5" fill="#6d28d9"/>
+  
+  <defs>
+  </svg>

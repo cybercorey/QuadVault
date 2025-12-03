@@ -1,0 +1,1 @@
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sd*", TAG+="systemd", ENV{SYSTEMD_WANTS}="usb-trigger@%k.service"

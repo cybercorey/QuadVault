@@ -1,0 +1,7 @@
+[Unit]
+Description=USB Automator Trigger for %I
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/usb-trigger.sh %I
+PrivateTmp=no

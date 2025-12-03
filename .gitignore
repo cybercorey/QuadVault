@@ -1,6 +1,17 @@
 # Environment
 .env
 
+# Binaries (downloaded from GitHub releases)
+mp4_merge
+gyroflow
+mp4-merge
+**/mp4_merge
+**/gyroflow
+worker/mp4_merge
+worker/gyroflow
+app/mp4_merge
+app/gyroflow
+
 # Runtime data
 app/data
 app/config

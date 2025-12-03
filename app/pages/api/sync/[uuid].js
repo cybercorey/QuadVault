@@ -1,6 +1,6 @@
 const { execSync } = require('child_process');
 const fs = require('fs-extra');
-const { emitLog } = require('../../../lib/socket')
+const { emitLog, emitJobQueued } = require('../../../lib/socket')
 const usbQueue = require('../../../lib/bullQueue');
 
 const CONFIG_FILE = '/app/config.json';
@@ -27,13 +27,15 @@ export default async function handler(req, res){
     const job = await usbQueue.add('sync-device', {
       deviceNode: node,
       uuid,
-      config: device
+      config: device,
+      jobType: 'sync'
     }, {
       jobId: `sync-${uuid}-${Date.now()}`,
       priority: 1
     });
     
     emitLog({ timestamp: new Date(), msg: `Sync job queued for ${device.friendlyName || device.outputPath} (Job ID: ${job.id})`, type: 'info' });
+    emitJobQueued({ jobId: job.id, uuid, jobType: 'sync', deviceName: device.friendlyName || device.outputPath });
     res.json({ success: true, message: 'Sync job queued', jobId: job.id });
   } catch(e) { 
     try{ emitLog({ timestamp: new Date(), message: `Sync failed for device ${uuid}: ${e.message || e}`, level: 'error' }) }catch(err){}

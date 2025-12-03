@@ -51,7 +51,16 @@ function emitJobComplete(payload){
     }
 }
 function emitJobLog(payload){ const io = getIo(); if(io) io.emit('job_log', payload); }
+function emitJobQueued(payload){ 
+    const io = getIo();
+    try { console.log('[emitJobQueued] io=' + (io ? 'exists' : 'NULL'), JSON.stringify(payload)) } catch(e){ console.log('[emitJobQueued] io=' + (io ? 'exists' : 'NULL')) }
+    if(io) {
+        io.emit('job_queued', payload);
+    } else {
+        console.log('[emitJobQueued] ERROR: io is null, cannot emit job_queued event');
+    }
+}
 
 function getRecentLogs(){ return logsBuffer.slice(-400) }
 
-module.exports = { setIo, emitLog, emitProgress, emitStorage, emitJobComplete, emitJobLog, getRecentLogs };
+module.exports = { setIo, emitLog, emitProgress, emitStorage, emitJobComplete, emitJobLog, emitJobQueued, getRecentLogs };

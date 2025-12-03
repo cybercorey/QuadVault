@@ -24,7 +24,31 @@ export default function HistoryList(){
   const [activeJobs, setActiveJobs] = useState({}) // {jobId: {percent, currentFile, uuid}}
   const toast = useToast()
 
-  useEffect(()=>{ load(page, limit); loadStorage() }, [page, limit])
+  useEffect(()=>{ load(page, limit); loadActiveJobs() }, [page, limit])
+
+  async function loadActiveJobs(){
+    try{
+      const r = await fetch('/api/queue-status')
+      const j = await r.json()
+      console.log('[HistoryList] loadActiveJobs response:', j)
+      if(j && j.activeJobs && Array.isArray(j.activeJobs)){
+        const jobs = {}
+        j.activeJobs.forEach(job=>{
+          if(job.id){
+            jobs[job.id] = {
+              percent: job.progress || 0,
+              currentFile: job.currentFile || 'Processing...',
+              uuid: job.data?.uuid || null
+            }
+          }
+        })
+        console.log('[HistoryList] Loaded active jobs:', jobs)
+        setActiveJobs(jobs)
+      }
+    }catch(e){ 
+      console.error('[HistoryList] loadActiveJobs error:', e)
+    }
+  }
 
   // Listen to socket events for real-time updates
   useEffect(()=>{
@@ -80,18 +104,38 @@ export default function HistoryList(){
       // future use: could show toast notifications
     }
     
+    const handleJobQueued = (data) => {
+      // data: {jobId, uuid, jobType, deviceName}
+      console.log('[HistoryList] job_queued event:', data)
+      if(!data || !data.jobId) return
+      
+      // Immediately reload history to show the new queued job
+      console.log('[HistoryList] New job queued, reloading history')
+      setTimeout(() => {
+        fetch(`/api/history?page=${page}&limit=${limit}`)
+          .then(r=>r.json())
+          .then(j=>{
+            setRows(j.jobs || [])
+            setTotal(j.total || 0)
+          })
+          .catch(()=>{})
+      }, 100)
+    }
+    
     console.log('[HistoryList] Setting up socket listeners')
     sock.on('progress', handleProgress)
     sock.on('job_complete', handleJobComplete)
     sock.on('job_log', handleJobLog)
+    sock.on('job_queued', handleJobQueued)
     
     return ()=>{
       console.log('[HistoryList] Cleaning up socket listeners')
       sock.off('progress', handleProgress)
       sock.off('job_complete', handleJobComplete)
       sock.off('job_log', handleJobLog)
+      sock.off('job_queued', handleJobQueued)
     }
-  }, []) // Empty deps - only set up once
+  }, [page, limit]) // Re-subscribe when page/limit changes for accurate reloads
 
   async function load(p=1, l=limit){
     setLoading(true)
@@ -133,13 +177,7 @@ export default function HistoryList(){
     }
   }
 
-  async function loadStorage(){
-    try{
-      const r = await fetch('/api/storage')
-      const j = await r.json()
-      setStorage({total:j.total, avail:j.avail, lastUpdated:j.lastUpdated, computing:!!j.computing})
-    }catch(e){}
-  }
+  // Storage updates come via socket listener
 
   function openJob(job){ setSelected(job); setOpen(true) }
   function formatSize(bytes){ if(!bytes) return '-'; const k=1024; const sizes=['B','KB','MB','GB','TB']; const i=Math.floor(Math.log(bytes)/Math.log(k)); return Math.round(bytes/Math.pow(k,i)*100)/100+' '+sizes[i] }
@@ -180,7 +218,7 @@ export default function HistoryList(){
       <Box bg="whiteAlpha.50" borderRadius="6px" border="1px solid" borderColor="whiteAlpha.100" overflow="hidden">
         <Table size="sm" variant="striped" colorScheme="whiteAlpha">
           <Thead>
-            <Tr><Th color="whiteAlpha.900">Time</Th><Th color="whiteAlpha.900">Device</Th><Th color="whiteAlpha.900">Status</Th><Th color="whiteAlpha.900">Files</Th><Th color="whiteAlpha.900">Size</Th><Th color="whiteAlpha.900">Duration</Th><Th></Th></Tr>
+            <Tr><Th color="whiteAlpha.900">Time</Th><Th color="whiteAlpha.900">Device</Th><Th color="whiteAlpha.900">Type</Th><Th color="whiteAlpha.900">Status</Th><Th color="whiteAlpha.900">Files</Th><Th color="whiteAlpha.900">Size</Th><Th color="whiteAlpha.900">Duration</Th><Th></Th></Tr>
           </Thead>
           <Tbody>
             {rows.map(r=> {
@@ -192,6 +230,22 @@ export default function HistoryList(){
               <Tr key={r.id}>
                 <Td color="whiteAlpha.900"><TimeCell ts={r.timestamp} /></Td>
                 <Td color="whiteAlpha.900">{r.device_name}</Td>
+                <Td>
+                  <Badge 
+                    background={
+                      r.jobType === 'sync' ? 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)' :
+                      r.jobType === 'merge' ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' :
+                      r.jobType === 'stabilize' ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' :
+                      'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)'
+                    }
+                    color="white"
+                    px={2}
+                    py={1}
+                    textTransform="capitalize"
+                  >
+                    {r.jobType || 'sync'}
+                  </Badge>
+                </Td>
                 <Td>
                   {isRunning ? (
                     <VStack align="start" spacing={1} minW="200px">
@@ -265,7 +319,7 @@ export default function HistoryList(){
                 </Td>
               </Tr>
             )})}
-            {rows.length===0 && <Tr><Td colSpan={7} textAlign="center" color="brand.muted" py={6}>No transfer history</Td></Tr>}
+            {rows.length===0 && <Tr><Td colSpan={8} textAlign="center" color="brand.muted" py={6}>No transfer history</Td></Tr>}
           </Tbody>
         </Table>
       </Box>

@@ -59,6 +59,8 @@ services:
       - /run/udev:/run/udev:ro
       - network_share:/mnt/network_share
       - ./app/lib:/app/lib:ro
+      - ./worker:/worker  # Mount worker source for hot reload
+      - /worker/node_modules  # Protect node_modules
       - ./config.json:/app/config.json:ro
     depends_on:
       redis:

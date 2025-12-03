@@ -11,9 +11,18 @@ A self-hosted, automated solution for offloading files from USB drives to a Netw
 * **Whitelist Security:** Only copies from allowed UUIDs.
 * **Granular Control:** Supports specific source folders (e.g., `/DCIM`) and manual sync buttons.
 * **Modern Web UI:** React dashboard with real-time progress, live logs via Socket.IO, device management, transfer history with pagination.
-* **DJI Video Merger:** Automatically merge split DJI video files into single per-flight files.
+* **DJI Video Merger:** Automatically merge split DJI video files into single per-flight files using [mp4-merge](https://github.com/gyroflow/mp4-merge).
+* **Video Stabilization:** FFmpeg-based stabilization with vid.stab filters for smooth footage.
 * **Dry Run Mode:** Test transfers without deleting source files.
 * **NTFS Support:** Automatic read-only mount fallback for NTFS drives with filesystem errors.
+
+---
+
+## 🙏 Credits
+
+This project uses the following excellent tools:
+* **[mp4-merge](https://github.com/gyroflow/mp4-merge)** - Fast, lossless MP4 file merging by the Gyroflow team
+* **[Gyroflow](https://github.com/gyroflow/gyroflow)** - Advanced video stabilization software (binary included for future features)
 
 ---
 
@@ -81,6 +90,10 @@ docker compose -f docker-compose.prod.yml up -d
 
 **Development (builds from local source with hot reload):**
 ```bash
+# First-time setup: Download required binaries
+./worker/download-binaries.sh
+
+# Start development environment
 docker compose -f docker-compose.dev.yml up -d --build
 ```
 
@@ -88,6 +101,7 @@ Development mode includes:
 - Next.js dev server with hot reload
 - Source code mounted for live changes
 - Full dev dependencies installed
+- Binaries downloaded from GitHub releases (not in git repo)
 
 ### Step 3: Install Host Triggers (Systemd Method)
 The `setup/` directory contains all required system integration files. Install them to enable automatic USB detection:

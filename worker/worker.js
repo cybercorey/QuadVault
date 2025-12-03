@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 
 // Import shared libraries from frontend (mounted as volume)
 const { computeStorage, DEST_ROOT } = require('/app/lib/storage');
-const { mergeFolder } = require('/app/lib/merger');
+const { mergeFolder, stabilizeAndMergeFolder } = require('./merger');
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -114,6 +114,24 @@ function getDateFromPath(filePath) {
         // Invalid date
     }
     return null;
+}
+
+// Generate thumbnail for video file
+async function generateThumbnail(videoPath, outputPath) {
+    try {
+        const dir = path.dirname(outputPath);
+        await fs.ensureDir(dir);
+        
+        // Use FFmpeg to extract frame at 1 second, scale to 320px width
+        execSync(
+            `ffmpeg -ss 1 -i "${videoPath}" -vframes 1 -vf "scale=320:-1" "${outputPath}" -y`,
+            { stdio: 'pipe' }
+        );
+        return true;
+    } catch (error) {
+        console.error(`[Thumbnail] Failed for ${path.basename(videoPath)}: ${error.message}`);
+        return false;
+    }
 }
 
 // Main job processor - stores everything in memory and returns to Bull job
@@ -260,6 +278,12 @@ async function processDrive(deviceNode, uuid, config, job){
             computeStorage().catch(()=>{});
             try { execSync(`umount ${MOUNT_POINT} 2>/dev/null`); } catch (e) {}
             
+            // Still include targetFolder even for "nothing to do" in case user wants to merge existing files
+            await job.update({
+                ...job.data,
+                targetFolder: targetDir
+            });
+            
             return {
                 success: true,
                 uuid,
@@ -268,6 +292,7 @@ async function processDrive(deviceNode, uuid, config, job){
                 files_moved: 0,
                 total_size: 0,
                 duration_seconds: duration,
+                targetFolder: targetDir,
                 files_json: JSON.stringify([]),
                 logs_json: JSON.stringify(logs),
                 merge_json: JSON.stringify([])
@@ -296,10 +321,24 @@ async function processDrive(deviceNode, uuid, config, job){
             // Use the file date from source (captured during scanning)
             const fileDate = f.date || new Date();
             
+            // Generate thumbnail for video files
+            let thumbnailPath = null;
+            const ext = path.extname(dest).toLowerCase();
+            if (['.mp4', '.mov', '.avi', '.mkv'].includes(ext)) {
+                const thumbName = path.basename(dest, ext) + '_thumb.jpg';
+                const thumbPath = path.join(path.dirname(dest), thumbName);
+                const thumbGenerated = await generateThumbnail(dest, thumbPath);
+                if (thumbGenerated) {
+                    thumbnailPath = path.relative(targetDir, thumbPath);
+                    addLog(`Generated thumbnail: ${thumbName}`);
+                }
+            }
+            
             processedFiles.push({ 
                 path: rel, 
                 size: f.size,
-                date: fileDate.toISOString()
+                date: fileDate.toISOString(),
+                thumbnail: thumbnailPath
             });
             moved++;
             const remaining = files.length - moved;
@@ -319,92 +358,37 @@ async function processDrive(deviceNode, uuid, config, job){
         socket.emit('log', { timestamp: new Date(), msg: `Complete for ${jobName} in ${duration}s.`, type:'info' });
         socket.emit('job_complete', { id: job.id, status: 'Completed', uuid });
         
-        // Trigger merger if enabled
-        const mergerEnabled = !!(config.mergerEnabled || config.merger_enabled);
-        if (mergerEnabled) {
-            const deviceRoot = path.join(DEST_ROOT, outFolder);
-            const outputFolder = path.join(deviceRoot, 'output');
-            const mergerOpts = {
-                outputFolder,
-                name: config.mergerName || config.merger_name || outFolder,
-                removeSplits: !!(config.deleteAfterMerge || config.delete_after_merge),
-                timeGap: config.mergerTimeGap || config.merger_time_gap || 10,
-                mp4MergePath: path.join(process.cwd(), 'mp4_merge'),
-                logger: (msg, type = 'info') => {
-                    addLog(msg, type);
-                    socket.emit('log', { timestamp: new Date(), msg, type });
-                }
-            };
+        // Queue merge/stabilize job after sync completes
+        const mergerType = config.mergerType || (config.mergerEnabled || config.merger_enabled ? 'merge' : 'none');
+        if (mergerType !== 'none') {
+            const jobType = mergerType === 'stabilize' ? 'stabilize-videos' : 'merge-videos';
+            const jobIdPrefix = mergerType === 'stabilize' ? 'stabilize' : 'merge';
             
             try {
-                const progressData = { jobId: job.id, uuid, percent: 0, currentFile: 'Starting merge...', moved: 0, total: 0, status: 'Merging', deviceName: jobName };
-                socket.emit('progress', progressData);
-                await job.progress(progressData);
-                
-                addLog(`[Merge Job] Starting merge process`);
-                addLog(`[Merge Job] Source: ${targetDir}`);
-                addLog(`[Merge Job] Output: ${outputFolder}`);
-                socket.emit('log', { timestamp: new Date(), msg: `Starting video merge for ${jobName}`, type: 'info' });
-                
-                let currentMerge = 0;
-                let totalMerges = 0;
-                
-                const mergeLoggerWithProgress = async (msg, type = 'info') => {
-                    addLog(msg, type);
-                    socket.emit('log', { timestamp: new Date(), msg, type });
-                    
-                    const progressMatch = msg.match(/Processing merge (\d+)\/(\d+)/);
-                    if (progressMatch) {
-                        currentMerge = parseInt(progressMatch[1]);
-                        totalMerges = parseInt(progressMatch[2]);
-                        const percent = Math.round((currentMerge / totalMerges) * 100);
-                        const progressData = { 
-                            jobId: job.id,
-                            uuid, 
-                            percent, 
-                            currentFile: `Merging flight ${currentMerge}/${totalMerges}`, 
-                            moved: currentMerge, 
-                            total: totalMerges, 
-                            status: 'Merging',
-                            deviceName: jobName
-                        };
-                        socket.emit('progress', progressData);
-                        await job.progress(progressData);
-                    }
-                };
-                
-                const result = await mergeFolder(targetDir, { ...mergerOpts, logger: mergeLoggerWithProgress });
-                
-                if (result.merges && result.merges.length > 0) {
-                    merges = result.merges;
-                }
-                
-                addLog(`[Merge Job] Completed: ${result.flights} flight(s) processed`);
-                socket.emit('log', { timestamp: new Date(), msg: `Merge complete: ${result.flights} flight(s)`, type: 'info' });
-                socket.emit('job_complete', { id: job.id, status: 'Completed', uuid });
-            } catch (error) {
-                addLog(`[Merge Job] Failed: ${error.message}`, 'error');
-                socket.emit('log', { timestamp: new Date(), msg: `Merge failed: ${error.message}`, type: 'error' });
-                socket.emit('job_complete', { id: job.id, status: 'Merge Failed', uuid });
-                
-                // Return partial success with merge error
-                return {
-                    success: true,
+                const queueJob = await usbQueue.add(jobType, {
                     uuid,
-                    device_name: jobName,
-                    status: 'Merge Failed',
-                    files_moved: moved,
-                    total_size: totalSize,
-                    duration_seconds: Math.round((Date.now() - startTs) / 1000),
-                    files_json: JSON.stringify(processedFiles),
-                    logs_json: JSON.stringify(logs),
-                    merge_json: JSON.stringify(merges)
-                };
+                    config,
+                    targetFolder: targetDir,
+                    jobType: mergerType
+                }, {
+                    jobId: `${jobIdPrefix}-${uuid}-${Date.now()}`,
+                    priority: 2
+                });
+                
+                socket.emit('log', { timestamp: new Date(), msg: `Queued ${mergerType} job: ${queueJob.id}`, type: 'info' });
+            } catch (error) {
+                socket.emit('log', { timestamp: new Date(), msg: `Failed to queue ${mergerType} job: ${error.message}`, type: 'error' });
             }
         }
         
         socket.emit('job_complete', { id: job.id, status: 'Completed', uuid });
         computeStorage().catch(()=>{});
+        
+        // Update job data to include targetFolder for manual merge/stabilize triggers
+        await job.update({
+            ...job.data,
+            targetFolder: targetDir
+        });
         
         // Return all job data to be stored in Bull job
         return {
@@ -415,6 +399,7 @@ async function processDrive(deviceNode, uuid, config, job){
             files_moved: moved,
             total_size: totalSize,
             duration_seconds: duration,
+            targetFolder: targetDir,
             files_json: JSON.stringify(processedFiles),
             logs_json: JSON.stringify(logs),
             merge_json: JSON.stringify(merges)
@@ -455,6 +440,134 @@ usbQueue.process('sync-device', async (job) => {
         return result;
     } catch (error) {
         console.error(`[Worker] Job ${job.id} failed:`, error);
+        throw error;
+    }
+});
+
+// Process merge-videos jobs
+usbQueue.process('merge-videos', async (job) => {
+    console.log(`[Worker] Processing merge job ${job.id}:`, job.data);
+    const { uuid, config, targetFolder } = job.data;
+    const jobName = config.friendlyName || config.outputPath || uuid;
+    
+    const logs = [];
+    const addLog = (msg, type = 'info') => {
+        logs.push({ timestamp: Date.now(), msg, type });
+        socket.emit('job_log', { jobId: job.id, entry: { timestamp: Date.now(), msg, type } });
+    };
+    
+    try {
+        const deviceRoot = path.dirname(targetFolder);
+        const outputFolder = path.join(deviceRoot, 'output');
+        const mergerOpts = {
+            outputFolder,
+            name: config.mergerName || config.merger_name || path.basename(deviceRoot),
+            removeSplits: !!(config.deleteAfterMerge || config.delete_after_merge),
+            timeGap: config.mergerTimeGap || config.merger_time_gap || 10,
+            mp4MergePath: path.join(process.cwd(), 'mp4_merge'),
+            logger: async (msg, type = 'info') => {
+                addLog(msg, type);
+                socket.emit('log', { timestamp: new Date(), msg, type });
+                
+                const progressMatch = msg.match(/Processing merge (\d+)\/(\d+)/);
+                if (progressMatch) {
+                    const current = parseInt(progressMatch[1]);
+                    const total = parseInt(progressMatch[2]);
+                    const percent = Math.round((current / total) * 100);
+                    const progressData = { 
+                        jobId: job.id, uuid, percent, 
+                        currentFile: `Merging flight ${current}/${total}`, 
+                        moved: current, total, 
+                        status: 'Merging',
+                        deviceName: jobName
+                    };
+                    socket.emit('progress', progressData);
+                    await job.progress(progressData);
+                }
+            }
+        };
+        
+        socket.emit('log', { timestamp: new Date(), msg: `Starting merge for ${jobName}`, type: 'info' });
+        const result = await mergeFolder(targetFolder, mergerOpts);
+        
+        socket.emit('log', { timestamp: new Date(), msg: `Merge complete: ${result.flights} flight(s)`, type: 'info' });
+        socket.emit('job_complete', { id: job.id, status: 'Completed', uuid });
+        
+        return {
+            success: true,
+            uuid,
+            device_name: jobName,
+            status: 'Completed',
+            flights: result.flights,
+            merges: result.merges,
+            logs_json: JSON.stringify(logs)
+        };
+    } catch (error) {
+        addLog(`Merge failed: ${error.message}`, 'error');
+        socket.emit('log', { timestamp: new Date(), msg: `Merge failed: ${error.message}`, type: 'error' });
+        socket.emit('job_complete', { id: job.id, status: 'Failed', uuid });
+        throw error;
+    }
+});
+
+// Process stabilize-videos jobs
+usbQueue.process('stabilize-videos', async (job) => {
+    console.log(`[Worker] Processing stabilize job ${job.id}:`, job.data);
+    const { uuid, config, targetFolder } = job.data;
+    const jobName = config.friendlyName || config.outputPath || uuid;
+    
+    const logs = [];
+    const addLog = (msg, type = 'info') => {
+        logs.push({ timestamp: Date.now(), msg, type });
+        socket.emit('job_log', { jobId: job.id, entry: { timestamp: Date.now(), msg, type } });
+    };
+    
+    try {
+        const deviceRoot = path.dirname(targetFolder);
+        const outputFolder = path.join(deviceRoot, 'output');
+        const mergerOpts = {
+            outputFolder,
+            name: config.mergerName || config.merger_name || path.basename(deviceRoot),
+            removeSplits: !!(config.deleteAfterMerge || config.delete_after_merge),
+            timeGap: config.mergerTimeGap || config.merger_time_gap || 10,
+            logger: async (msg, type = 'info') => {
+                addLog(msg, type);
+                socket.emit('log', { timestamp: new Date(), msg, type });
+                
+                const progressMatch = msg.match(/Stabilizing (\d+) video/);
+                if (progressMatch) {
+                    const progressData = { 
+                        jobId: job.id, uuid, percent: 50, 
+                        currentFile: msg, 
+                        moved: 0, total: 1, 
+                        status: 'Stabilizing',
+                        deviceName: jobName
+                    };
+                    socket.emit('progress', progressData);
+                    await job.progress(progressData);
+                }
+            }
+        };
+        
+        socket.emit('log', { timestamp: new Date(), msg: `Starting stabilization for ${jobName}`, type: 'info' });
+        const result = await stabilizeAndMergeFolder(targetFolder, mergerOpts);
+        
+        socket.emit('log', { timestamp: new Date(), msg: `Stabilization complete: ${result.flights} flight(s)`, type: 'info' });
+        socket.emit('job_complete', { id: job.id, status: 'Completed', uuid });
+        
+        return {
+            success: true,
+            uuid,
+            device_name: jobName,
+            status: 'Completed',
+            flights: result.flights,
+            merges: result.merges,
+            logs_json: JSON.stringify(logs)
+        };
+    } catch (error) {
+        addLog(`Stabilization failed: ${error.message}`, 'error');
+        socket.emit('log', { timestamp: new Date(), msg: `Stabilization failed: ${error.message}`, type: 'error' });
+        socket.emit('job_complete', { id: job.id, status: 'Failed', uuid });
         throw error;
     }
 });

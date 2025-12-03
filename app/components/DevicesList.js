@@ -20,13 +20,14 @@ export default function DevicesList(){
     }).catch(()=>setDevices([]))
   }, [refreshKey])
 
+  // Load initial storage data once on mount
   useEffect(()=>{
     setStorageLoading(true)
     fetch('/api/storage').then(r=>r.json()).then(j=>{
       setStorageChildren(j.children || [])
       setStorageTotal(j.total || null)
     }).catch(()=>setStorageChildren([])).finally(()=>setStorageLoading(false))
-  }, [refreshKey])
+  }, [])
 
   // update storage children and total when server emits storage updates
   useSocket('storage', (payload)=>{
@@ -156,7 +157,8 @@ export default function DevicesList(){
                     <Text fontWeight="600">{dev.friendlyName || dev.outputPath || 'Unnamed'}</Text>
                     {isRunning && <Badge background="linear-gradient(135deg, #f59e0b 0%, #d97706 100%)" color="white" px={2} py={1}>Syncing</Badge>}
                     {!isRunning && <Badge background={dev.status==='active' ? 'var(--theme-gradient, linear-gradient(135deg, #667eea 0%, #764ba2 100%))' : 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)'} color="white" px={2} py={1}>{dev.status==='active' ? 'Active' : 'Paused'}</Badge>}
-                    {(dev.mergerEnabled || dev.merger_enabled) && <Badge background="linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)" color="white" px={2} py={1}>Merger</Badge>}
+                    {(dev.mergerType==='merge' || dev.mergerEnabled) && <Badge background="linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)" color="white" px={2} py={1}>Merge</Badge>}
+                    {dev.mergerType==='stabilize' && <Badge background="linear-gradient(135deg, #10b981 0%, #059669 100%)" color="white" px={2} py={1}>Stabilize</Badge>}
                     {(dev.dryRun || dev.dry_run) && <Badge background="linear-gradient(135deg, #6b7280 0%, #4b5563 100%)" color="white" px={2} py={1}>Dry</Badge>}
                   </HStack>
                   <Text fontSize="xs" color="whiteAlpha.700">Output: <Text as="span" color="purple.300">/{dev.outputPath}</Text> • Src: <Text as="span" color="purple.300">{dev.sourcePath || '-'}</Text></Text>

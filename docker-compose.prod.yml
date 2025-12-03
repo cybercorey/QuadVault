@@ -18,12 +18,7 @@ services:
       retries: 5
 
   quadvault:
-    # Use pre-built images when available from GitHub Container Registry
-    # image: ghcr.io/cybercorey/quadvault:latest
-    # For now, build locally until images are published
-    build:
-      context: ./app
-      target: production
+    image: ghcr.io/cybercorey/quadvault:latest
     container_name: quadvault
     restart: always
     privileged: true  # Required for mounting /dev/sdX inside container
@@ -42,12 +37,7 @@ services:
         condition: service_healthy
 
   worker:
-    # Use pre-built images when available from GitHub Container Registry
-    # image: ghcr.io/cybercorey/quadvault-worker:latest
-    # For now, build locally until images are published
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
+    image: ghcr.io/cybercorey/quadvault-worker:latest
     container_name: quadvault-worker
     restart: always
     privileged: true  # Required for mounting /dev/sdX inside container

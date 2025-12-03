@@ -1,12 +1,28 @@
 import { useEffect, useState } from 'react'
-import { Modal, ModalOverlay, ModalContent, ModalHeader, ModalCloseButton, ModalBody, ModalFooter, Button, FormControl, FormLabel, Input, Checkbox, VStack, HStack, Table, Thead, Tbody, Tr, Th, Td, Box, Text } from '@chakra-ui/react'
+import { Modal, ModalOverlay, ModalContent, ModalHeader, ModalCloseButton, ModalBody, ModalFooter, Button, FormControl, FormLabel, Input, Checkbox, VStack, HStack, Table, Thead, Tbody, Tr, Th, Td, Box, Text, RadioGroup, Radio, Stack } from '@chakra-ui/react'
 
 export default function DeviceModal({ isOpen, onClose, onSave, initial }){
-  const [device, setDevice] = useState(initial || { friendlyName:'', outputPath:'', uuid:'', sourcePath:'', status:'active', mergerEnabled:false, dryRun:false, deleteAfterMerge:false })
+  const [device, setDevice] = useState(initial || { friendlyName:'', outputPath:'', uuid:'', sourcePath:'', status:'active', mergerType:'none', dryRun:false, deleteAfterMerge:false })
   const [scanning, setScanning] = useState(false)
   const [scanned, setScanned] = useState([])
 
-  useEffect(()=> setDevice(initial || { friendlyName:'', outputPath:'', uuid:'', sourcePath:'', status:'active', mergerEnabled:false, dryRun:false, deleteAfterMerge:false }), [initial])
+  useEffect(()=> {
+    const defaults = { friendlyName:'', outputPath:'', uuid:'', sourcePath:'', status:'active', mergerType:'none', dryRun:false, deleteAfterMerge:false }
+    const init = initial ? {...defaults, ...initial} : defaults
+    // Migrate old mergerEnabled to mergerType
+    if(init.mergerEnabled !== undefined && !init.mergerType) {
+      init.mergerType = init.mergerEnabled ? 'merge' : 'none'
+      delete init.mergerEnabled
+    }
+    setDevice(init)
+  }, [initial])
+
+  // Auto-scan when modal opens
+  useEffect(()=>{
+    if(isOpen){
+      scanDevices()
+    }
+  }, [isOpen])
 
   async function scanDevices(){
     setScanning(true)
@@ -59,10 +75,17 @@ export default function DeviceModal({ isOpen, onClose, onSave, initial }){
                   <Checkbox isChecked={device.status==='active'} onChange={e=>setDevice({...device, status: e.target.checked ? 'active' : 'paused'})}>Active (uncheck to pause)</Checkbox>
                 </FormControl>
                 <FormControl mt={2}>
-                  <Checkbox isChecked={!!device.mergerEnabled} onChange={e=>setDevice({...device, mergerEnabled:!!e.target.checked})}>Enable Merger</Checkbox>
+                  <FormLabel fontSize="sm">Video Processing</FormLabel>
+                  <RadioGroup value={device.mergerType || 'none'} onChange={val=>setDevice({...device, mergerType:val})}>
+                    <Stack spacing={2}>
+                      <Radio value="none">None - Copy files only</Radio>
+                      <Radio value="merge">Merge - Combine split videos</Radio>
+                      <Radio value="stabilize">Stabilize - Merge + stabilize footage</Radio>
+                    </Stack>
+                  </RadioGroup>
                 </FormControl>
                 <FormControl mt={2}>
-                  <Checkbox isChecked={!!device.deleteAfterMerge} onChange={e=>setDevice({...device, deleteAfterMerge:!!e.target.checked})} isDisabled={!device.mergerEnabled}>Delete splits after merge</Checkbox>
+                  <Checkbox isChecked={!!device.deleteAfterMerge} onChange={e=>setDevice({...device, deleteAfterMerge:!!e.target.checked})} isDisabled={device.mergerType==='none'}>Delete splits after merge</Checkbox>
                 </FormControl>
                 <FormControl mt={2}>
                   <Checkbox isChecked={!!device.dryRun} onChange={e=>setDevice({...device, dryRun:!!e.target.checked})}>Dry Run (don't delete source)</Checkbox>

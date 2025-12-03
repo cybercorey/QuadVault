@@ -69,6 +69,7 @@ export default async function handler(req, res){
         id: job.id,
         uuid: job.data.uuid || progressData.uuid,
         device_name: deviceName,
+        jobType: job.data.jobType || 'sync',
         status: state === 'completed' ? 'Completed' : 
                 state === 'failed' ? 'Failed' : 
                 state === 'active' ? 'Running' : 
@@ -112,6 +113,7 @@ export default async function handler(req, res){
         id: job.id,
         uuid: job.data.uuid,
         device_name: job.data.config?.friendlyName || job.data.config?.outputPath || 'Unknown',
+        jobType: job.data.jobType || 'sync',
         status: state === 'completed' ? 'Completed' : 
                 state === 'failed' ? 'Failed' : 
                 state === 'active' ? 'Running' : 

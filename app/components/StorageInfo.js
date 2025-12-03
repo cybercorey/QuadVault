@@ -7,18 +7,8 @@ export default function StorageInfo({ compact=false }){
   const [storage, setStorage] = useState({ total:null, avail:null, children:[], lastUpdated:null, computing:false })
   const [refreshing, setRefreshing] = useState(false)
   
+  // Load initial storage data on mount
   useEffect(()=>{ load() }, [])
-  // Poll on mount until storage is available, then stop
-  useEffect(()=>{
-    let tries = 0
-    const poll = setInterval(async ()=>{
-      tries++
-      const j = await fetch('/api/storage').then(r=>r.json()).catch(()=>null)
-      if(j && j.total){ setStorage(j); clearInterval(poll) }
-      if(tries>20) clearInterval(poll)
-    }, 1500)
-    return ()=>clearInterval(poll)
-  }, [])
   
   async function load(){
     try{
@@ -33,24 +23,16 @@ export default function StorageInfo({ compact=false }){
     try{
       setRefreshing(true)
       await fetch('/api/storage/refresh', { method:'POST' })
-      const prev = storage.lastUpdated || 0
-      const start = Date.now()
-      const poll = setInterval(async ()=>{
-        try{
-          const r = await fetch('/api/storage').then(res=>res.json())
-          if(r){ setStorage(r) }
-          if(!r || (r.lastUpdated && r.lastUpdated !== prev) || !r.computing || Date.now()-start>120000){
-            clearInterval(poll); setRefreshing(false)
-          }
-        }catch(e){ clearInterval(poll); setRefreshing(false) }
-      }, 1500)
-    }catch(e){ setRefreshing(false) }
+    }catch(e){ 
+      setRefreshing(false) 
+    }
   }
 
   // listen for server 'storage' events to update the UI in real-time
   useSocket('storage', (payload)=>{
     if(payload){
       setStorage(payload)
+      setRefreshing(false) // Stop refreshing spinner when new data arrives
       try{ localStorage.setItem('ua:storage', JSON.stringify(payload)) }catch(e){}
     }
   })
@@ -60,8 +42,6 @@ export default function StorageInfo({ compact=false }){
   const formatSize = (bytes)=>{ if(bytes==null) return '-'; const k=1024; const sizes=['B','KB','MB','GB','TB']; const i=Math.floor(Math.log(bytes)/Math.log(k)); return Math.round(bytes/Math.pow(k,i)*100)/100+' '+sizes[i] }
   
   if(compact){
-    const usedBytes = storage.total && storage.avail != null ? (storage.total - storage.avail) : null
-    const usedPercent = (storage.total && usedBytes != null) ? Math.round((usedBytes / storage.total) * 100) : 0
     const formatShort = (bytes)=>{
       if(bytes==null) return '-'
       const tb = 1024*1024*1024*1024

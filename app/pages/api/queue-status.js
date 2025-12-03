@@ -12,18 +12,28 @@ export default async function handler(req, res) {
       usbQueue.getDelayed()
     ]);
 
+    const activeJobsWithProgress = await Promise.all(active.map(async (job) => {
+      const progressData = job._progress || {};
+      const progress = typeof progressData === 'number' ? progressData : (progressData.percent || 0);
+      return {
+        id: job.id,
+        data: job.data,
+        timestamp: job.timestamp,
+        processedOn: job.processedOn,
+        progress,
+        currentFile: progressData.currentFile || null,
+        moved: progressData.moved || 0,
+        total: progressData.total || 0
+      };
+    }));
+
     const stats = {
       waiting: waiting.length,
       active: active.length,
       completed: completed.length,
       failed: failed.length,
       delayed: delayed.length,
-      activeJobs: active.map(job => ({
-        id: job.id,
-        data: job.data,
-        timestamp: job.timestamp,
-        processedOn: job.processedOn
-      })),
+      activeJobs: activeJobsWithProgress,
       waitingJobs: waiting.map(job => ({
         id: job.id,
         data: job.data,

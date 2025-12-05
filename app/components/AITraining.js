@@ -39,6 +39,7 @@ import {
   Spinner,
 } from '@chakra-ui/react';
 import { CheckCircleIcon, WarningIcon, TimeIcon, StarIcon } from '@chakra-ui/icons';
+import LabelManager from './LabelManager';
 
 export default function AITraining() {
   const toast = useToast();
@@ -217,6 +218,7 @@ export default function AITraining() {
 
         <Tabs variant="soft-rounded" colorScheme="purple">
           <TabList>
+            <Tab>0. Label Videos</Tab>
             <Tab>1. Prepare Dataset</Tab>
             <Tab>2. Train Model</Tab>
             <Tab>3. Batch Classify</Tab>
@@ -224,6 +226,11 @@ export default function AITraining() {
           </TabList>
 
           <TabPanels>
+            {/* Tab 0: Label Manager */}
+            <TabPanel>
+              <LabelManager onLabelsReady={(path) => setLabelsPath(path)} />
+            </TabPanel>
+
             {/* Tab 1: Dataset Preparation */}
             <TabPanel>
               <VStack spacing={6} align="stretch">

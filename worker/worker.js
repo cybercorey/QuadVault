@@ -7,6 +7,8 @@ const { execSync, spawn } = require('child_process');
 // Import shared libraries from frontend (mounted as volume)
 const { computeStorage, DEST_ROOT } = require('/app/lib/storage');
 const { mergeFolder, stabilizeAndMergeFolder } = require('./merger');
+const { getAdvancedSettings } = require('/app/lib/advancedSettings');
+const { shouldCopyFile } = require('./fileHashCache');
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -82,6 +84,36 @@ const usbQueue = new Queue('usb-jobs', REDIS_URL, {
 });
 
 console.log('[Worker] Queue configured, waiting for jobs...');
+
+// Load concurrency settings (set at startup, requires restart to change)
+let concurrencySettings = { syncConcurrency: 1, mergeConcurrency: 1, stabilizeConcurrency: 1 };
+
+async function loadConcurrencySettings() {
+    try {
+        const settings = await getAdvancedSettings();
+        const parallel = settings.parallel_processing || {};
+        
+        concurrencySettings = {
+            syncConcurrency: parallel.enabled ? Math.floor(parallel.max_concurrent_devices || 1) : 1,
+            mergeConcurrency: parallel.enabled ? Math.floor(parallel.max_concurrent_jobs || 2) : 1,
+            stabilizeConcurrency: parallel.enabled ? Math.floor(parallel.max_concurrent_jobs || 2) : 1
+        };
+        console.log('[Worker] Concurrency settings loaded:', concurrencySettings);
+        console.log('[Worker] Note: Changing concurrency requires worker restart');
+    } catch (err) {
+        console.error('[Worker] Failed to load concurrency settings:', err.message);
+        concurrencySettings = { syncConcurrency: 1, mergeConcurrency: 1, stabilizeConcurrency: 1 };
+    }
+}
+
+// Initialize worker with async setup
+async function initWorker() {
+    await loadConcurrencySettings();
+    console.log('[Worker] Queue configured with concurrency:', concurrencySettings);
+    setupQueueProcessors();
+}
+
+function setupQueueProcessors() {
 
 // Helper functions
 async function safeCopyAndDelete(src, dest) {
@@ -343,11 +375,26 @@ async function processDrive(deviceNode, uuid, config, job){
         }
 
         let moved=0;
+        let skipped=0;
         const dryRun = !!(config.dryRun || config.dry_run);
+        const advSettings = await getAdvancedSettings();
+        
         for(const f of files){
             const rel = path.relative(srcDir, f.path);
             const dest = path.join(targetDir, rel);
             await fs.ensureDir(path.dirname(dest));
+            
+            // Check if we should skip this file (incremental sync)
+            if (advSettings.incremental_sync?.enabled && advSettings.incremental_sync?.skip_unchanged) {
+                const check = await shouldCopyFile(f.path, dest, advSettings);
+                if (!check.shouldCopy) {
+                    skipped++;
+                    addLog(`Skipped (${check.reason}): ${rel}`, 'info');
+                    continue;
+                }
+                addLog(`Copying (${check.reason}): ${rel}`, 'info');
+            }
+            
             try{
                 if(dryRun){
                     const tempDest = dest + '.part';
@@ -398,7 +445,8 @@ async function processDrive(deviceNode, uuid, config, job){
         execSync(`umount ${MOUNT_POINT}`);
 
         const duration = Math.round((Date.now() - startTs) / 1000);
-        socket.emit('log', { timestamp: new Date(), msg: `Complete for ${jobName} in ${duration}s.`, type:'info' });
+        const summaryMsg = `Complete for ${jobName} in ${duration}s. Copied: ${moved}, Skipped: ${skipped || 0}`;
+        socket.emit('log', { timestamp: new Date(), msg: summaryMsg, type:'info' });
         socket.emit('job_complete', { id: job.id, status: 'Completed', uuid });
         
         // Queue merge/stabilize job after sync completes
@@ -481,8 +529,8 @@ async function processDrive(deviceNode, uuid, config, job){
     }
 }
 
-// Process sync-device jobs
-usbQueue.process('sync-device', async (job) => {
+// Process sync-device jobs (concurrency set at startup)
+usbQueue.process('sync-device', concurrencySettings.syncConcurrency, async (job) => {
     console.log(`[Worker] Processing job ${job.id}:`, job.data);
     const { deviceNode, uuid, config } = job.data;
     
@@ -495,8 +543,8 @@ usbQueue.process('sync-device', async (job) => {
     }
 });
 
-// Process merge-videos jobs
-usbQueue.process('merge-videos', async (job) => {
+// Process merge-videos jobs (concurrency set at startup)
+usbQueue.process('merge-videos', concurrencySettings.mergeConcurrency, async (job) => {
     console.log(`[Worker] Processing merge job ${job.id}:`, job.data);
     const { uuid, config, targetFolder } = job.data;
     const jobName = config.friendlyName || config.outputPath || uuid;
@@ -606,8 +654,8 @@ usbQueue.process('merge-videos', async (job) => {
     }
 });
 
-// Process stabilize-videos jobs
-usbQueue.process('stabilize-videos', async (job) => {
+// Process stabilize-videos jobs (concurrency set at startup)
+usbQueue.process('stabilize-videos', concurrencySettings.stabilizeConcurrency, async (job) => {
     console.log(`[Worker] Processing stabilize job ${job.id}:`, job.data);
     const { uuid, config, targetFolder } = job.data;
     const jobName = config.friendlyName || config.outputPath || uuid;
@@ -772,6 +820,7 @@ usbQueue.on('failed', (job, err) => {
 usbQueue.on('active', (job) => {
     console.log(`[Worker] Job ${job.id} is now active`);
 });
+}
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
@@ -788,4 +837,10 @@ process.on('SIGINT', async () => {
     process.exit(0);
 });
 
-console.log('[Worker] Worker is ready and listening for jobs');
+// Start the worker
+initWorker().then(() => {
+    console.log('[Worker] Worker is ready and listening for jobs');
+}).catch((err) => {
+    console.error('[Worker] Failed to initialize:', err);
+    process.exit(1);
+});

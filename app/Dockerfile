@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     ntfs-3g \
     exfat-fuse \
     usbutils \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

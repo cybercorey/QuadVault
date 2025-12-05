@@ -1,8 +1,27 @@
 const fs = require('fs-extra');
 const path = require('path');
+const { execSync } = require('child_process');
 
 const CONFIG_FILE = '/app/config.json';
 const DEST_ROOT = process.env.DEST_ROOT || '/mnt/network_share';
+
+// Generate thumbnail for video file
+async function generateThumbnail(videoPath, outputPath) {
+  try {
+    const dir = path.dirname(outputPath);
+    await fs.ensureDir(dir);
+    
+    // Use FFmpeg to extract frame at 1 second, scale to 320px width
+    execSync(
+      `ffmpeg -ss 1 -i "${videoPath}" -vframes 1 -vf "scale=320:-1" "${outputPath}" -y`,
+      { stdio: 'pipe' }
+    );
+    return true;
+  } catch (error) {
+    console.error(`[Thumbnail] Failed for ${path.basename(videoPath)}: ${error.message}`);
+    return false;
+  }
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -46,8 +65,22 @@ export default async function handler(req, res) {
         // Get MP4 files
         const mp4Files = files.filter(f => f.toLowerCase().endsWith('.mp4'));
         
-        // Get thumbnails
-        const thumbFiles = files.filter(f => f.endsWith('_thumb.jpg'));
+        // Generate missing thumbnails
+        for (const mp4File of mp4Files) {
+          const baseName = path.basename(mp4File, path.extname(mp4File));
+          const thumbName = `${baseName}_thumb.jpg`;
+          const thumbPath = path.join(folderPath, thumbName);
+          
+          // Only generate if thumbnail doesn't exist
+          if (!await fs.pathExists(thumbPath)) {
+            const videoPath = path.join(folderPath, mp4File);
+            await generateThumbnail(videoPath, thumbPath);
+          }
+        }
+        
+        // Get thumbnails (re-read after generation)
+        const updatedFiles = await fs.readdir(folderPath);
+        const thumbFiles = updatedFiles.filter(f => f.endsWith('_thumb.jpg'));
         const thumbnails = thumbFiles.slice(0, 4).map(t => 
           `/api/thumbnail/${encodeURIComponent(path.join(device.outputPath, entry.name, t))}`
         );

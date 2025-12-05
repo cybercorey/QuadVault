@@ -77,7 +77,14 @@ services:
       - ./app/lib:/app/lib:ro
       - ./worker/worker.js:/worker/worker.js  # Mount only source files, not binaries
       - ./worker/merger.js:/worker/merger.js
+      - ./worker/fileHashCache.js:/worker/fileHashCache.js
+      - ./worker/aiSceneDetector.js:/worker/aiSceneDetector.js
+      - ./worker/telemetryParser.js:/worker/telemetryParser.js
       - ./config.json:/app/config.json:ro
+      - ./app/advanced-settings.json:/app/advanced-settings.json
+      - ./app/storage-analytics.json:/app/storage-analytics.json
+      - ./app/file-hash-cache.json:/app/file-hash-cache.json
+      - ./app/telemetry-cache.json:/app/telemetry-cache.json
     depends_on:
       redis:
         condition: service_healthy

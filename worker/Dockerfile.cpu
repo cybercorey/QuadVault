@@ -1,0 +1,57 @@
+# CPU-only worker build (no GPU support, no video stabilization)
+# Use this for systems without NVIDIA GPUs
+
+FROM ubuntu:22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    GPU_SUPPORT=false
+
+# Install Node.js 20.x from NodeSource
+RUN apt-get update && apt-get install -y ca-certificates curl gnupg && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
+
+# Install system dependencies (lighter set without GPU packages)
+RUN apt-get update && apt-get install -y \
+    nodejs \
+    util-linux \
+    ntfs-3g \
+    exfat-fuse \
+    usbutils \
+    bash \
+    ffmpeg \
+    curl \
+    unzip \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /worker
+
+# Download mp4_merge (merging still works without GPU)
+RUN curl -L -o mp4_merge https://github.com/gyroflow/mp4-merge/releases/latest/download/mp4_merge-linux64 && \
+    chmod +x mp4_merge
+
+# Create stub gyroflow script that reports unavailability
+RUN printf '#!/bin/bash\necho "ERROR: Gyroflow not available - GPU support disabled (CPU-only build)" >&2\nexit 1\n' > /worker/gyroflow && \
+    chmod +x /worker/gyroflow
+
+# Copy package files
+COPY worker/package*.json ./
+
+# Install dependencies
+RUN npm install --production
+
+# Copy worker code
+COPY worker/worker.js ./
+COPY worker/merger.js ./
+
+# Copy shared libraries from app
+RUN mkdir -p /app/lib
+COPY app/lib/storage.js /app/lib/
+
+# Set NODE_PATH so shared libs can find worker's node_modules
+ENV NODE_PATH=/worker/node_modules
+
+CMD ["node", "worker.js"]

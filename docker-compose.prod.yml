@@ -37,15 +37,30 @@ services:
         condition: service_healthy
 
   worker:
+    # Use ghcr.io/cybercorey/quadvault-worker:latest for GPU support
+    # Use ghcr.io/cybercorey/quadvault-worker:latest-cpu for CPU-only (no stabilization)
     image: ghcr.io/cybercorey/quadvault-worker:latest
     container_name: quadvault-worker
     restart: always
     privileged: true  # Required for mounting /dev/sdX inside container
     network_mode: host
+    # GPU support - comment out this section for CPU-only deployment
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility, video, graphics]
     environment:
       - NODE_ENV=production
       - REDIS_URL=redis://localhost:6379
       - FRONTEND_URL=http://localhost:3000
+      - GPU_SUPPORT=true  # Set to false when using CPU-only image
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+      - VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
     volumes:
       - /dev:/dev
       - /run/udev:/run/udev:ro

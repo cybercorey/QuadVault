@@ -12,7 +12,7 @@ A self-hosted, automated solution for offloading files from USB drives to a Netw
 * **Granular Control:** Supports specific source folders (e.g., `/DCIM`) and manual sync buttons.
 * **Modern Web UI:** React dashboard with real-time progress, live logs via Socket.IO, device management, transfer history with pagination.
 * **DJI Video Merger:** Automatically merge split DJI video files into single per-flight files using [mp4-merge](https://github.com/gyroflow/mp4-merge).
-* **Video Stabilization:** FFmpeg-based stabilization with vid.stab filters for smooth footage.
+* **Video Stabilization:** GPU-accelerated stabilization using [Gyroflow](https://github.com/gyroflow/gyroflow) with automatic gyroscope data sync.
 * **Dry Run Mode:** Test transfers without deleting source files.
 * **NTFS Support:** Automatic read-only mount fallback for NTFS drives with filesystem errors.
 
@@ -22,7 +22,7 @@ A self-hosted, automated solution for offloading files from USB drives to a Netw
 
 This project uses the following excellent tools:
 * **[mp4-merge](https://github.com/gyroflow/mp4-merge)** - Fast, lossless MP4 file merging by the Gyroflow team
-* **[Gyroflow](https://github.com/gyroflow/gyroflow)** - Advanced video stabilization software (binary included for future features)
+* **[Gyroflow](https://github.com/gyroflow/gyroflow)** - Advanced GPU-accelerated video stabilization with gyroscope data
 
 ---
 
@@ -45,12 +45,74 @@ This project uses the following excellent tools:
 ### 1. Host OS
 * **Ubuntu 24.04** (or similar Linux).
 * **Docker Engine** & **Docker Compose** (v2+).
+* **NVIDIA GPU** (optional, required for video stabilization with Gyroflow).
 
 ### 2. Network Share Utilities
 The host machine requires CIFS utilities to handle the SMB volume driver.
 ```bash
 sudo apt update && sudo apt install -y cifs-utils
 ```
+
+### 3. GPU Support (Optional - For Video Stabilization)
+Gyroflow requires GPU acceleration for video stabilization. **QuadVault supports both GPU and CPU-only deployments:**
+
+#### GPU Deployment (Recommended for video stabilization)
+To enable GPU support in Docker:
+
+**Install NVIDIA Container Toolkit:**
+```bash
+# Add NVIDIA package repository
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+# Install the toolkit
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+
+# Configure Docker to use NVIDIA runtime
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+
+# Verify installation
+docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
+```
+
+Use the standard docker-compose configuration with GPU support enabled (default).
+
+#### CPU-Only Deployment (No video stabilization)
+For systems without NVIDIA GPUs, use the CPU-only build:
+
+**Development:**
+```bash
+# Edit docker-compose.dev.yml and change:
+# GPU_SUPPORT: "false" in worker build args
+# GPU_SUPPORT=false in worker environment
+# Comment out the deploy.resources section
+
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+**Production:**
+```bash
+# Use the CPU-only image tag
+# Edit docker-compose.prod.yml:
+image: ghcr.io/cybercorey/quadvault-worker:latest-cpu
+
+# Set environment variable:
+GPU_SUPPORT=false
+
+# Comment out the deploy.resources section
+```
+
+**Feature Availability:**
+- ✅ **CPU-only builds:** File sync, video merging, history, storage management
+- ❌ **CPU-only builds:** Video stabilization (requires GPU)
+- ✅ **GPU builds:** All features including video stabilization
+
+The UI automatically detects worker capabilities and hides stabilization options when running in CPU-only mode.
 
 ---
 
@@ -83,8 +145,27 @@ Set up your `.env` file as described in the Configuration section above.
 
 ### Step 2: Start the Container
 
+QuadVault offers two worker variants to suit your hardware:
+
+**GPU Build (Default):**
+- Includes video stabilization with Gyroflow
+- Requires NVIDIA GPU and nvidia-docker
+- Full feature set
+
+**CPU-Only Build:**
+- Lighter weight, no GPU dependencies
+- File sync and video merging work normally
+- Video stabilization disabled
+
 **Production (uses pre-built images from GitHub):**
 ```bash
+# GPU build (default)
+docker compose -f docker-compose.prod.yml up -d
+
+# CPU-only build (edit docker-compose.prod.yml first):
+# Change: image: ghcr.io/cybercorey/quadvault-worker:latest-cpu
+# Set: GPU_SUPPORT=false
+# Remove: deploy.resources section
 docker compose -f docker-compose.prod.yml up -d
 ```
 
@@ -93,7 +174,13 @@ docker compose -f docker-compose.prod.yml up -d
 # First-time setup: Download required binaries
 ./worker/download-binaries.sh
 
-# Start development environment
+# GPU build (default)
+docker compose -f docker-compose.dev.yml up -d --build
+
+# CPU-only build (edit docker-compose.dev.yml first):
+# In worker.build.args: GPU_SUPPORT: "false"
+# In worker.environment: GPU_SUPPORT=false
+# Remove: deploy.resources section
 docker compose -f docker-compose.dev.yml up -d --build
 ```
 
@@ -102,6 +189,7 @@ Development mode includes:
 - Source code mounted for live changes
 - Full dev dependencies installed
 - Binaries downloaded from GitHub releases (not in git repo)
+- Auto-detection of GPU capabilities with UI feedback
 
 ### Step 3: Install Host Triggers (Systemd Method)
 The `setup/` directory contains all required system integration files. Install them to enable automatic USB detection:

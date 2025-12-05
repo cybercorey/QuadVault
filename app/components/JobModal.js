@@ -153,45 +153,47 @@ export default function JobModal({ isOpen, onClose, job: initialJob }){
 
             <Divider borderColor="whiteAlpha.200" />
 
-            <Box>
-              <Text fontWeight="600" mb={2}>Copied Files ({files.length})</Text>
-              {files.length ? (
-                <List spacing={2} style={{maxHeight:'400px', overflow:'auto'}} bg="blackAlpha.300" p={3} borderRadius="6px">
-                  {files.map((f,i)=>{
-                    const filePath = typeof f === 'string' ? f : (f.path || JSON.stringify(f))
-                    const fileSize = typeof f === 'object' && f.size ? ` (${formatSize(f.size)})` : ''
-                    const fileDate = typeof f === 'object' && f.date ? new Date(f.date).toLocaleString() : ''
-                    const thumbnail = typeof f === 'object' && f.thumbnail ? f.thumbnail : null
-                    
-                    // Build thumbnail URL
-                    const thumbnailUrl = thumbnail && job.data?.targetFolder 
-                      ? `/api/thumbnail/${encodeURIComponent(job.data.targetFolder.split('/').slice(-2).join('/'))}/${encodeURIComponent(thumbnail)}`
-                      : null
-                    
-                    return (
-                      <ListItem key={i}>
-                        <HStack spacing={3} align="start">
-                          {thumbnailUrl && (
-                            <Image 
-                              src={thumbnailUrl} 
-                              alt={filePath}
-                              boxSize="80px"
-                              objectFit="cover"
-                              borderRadius="4px"
-                              fallback={<Box boxSize="80px" bg="blackAlpha.500" borderRadius="4px" />}
-                            />
-                          )}
-                          <VStack align="start" flex={1} spacing={0}>
-                            <Text fontSize="sm" fontFamily="monospace">{filePath}{fileSize}</Text>
-                            {fileDate && <Text fontSize="xs" color="whiteAlpha.600">{fileDate}</Text>}
-                          </VStack>
-                        </HStack>
-                      </ListItem>
-                    )
-                  })}
-                </List>
-              ) : <Text color="brand.muted">No files recorded</Text>}
-            </Box>
+            {jobType === 'sync' && (
+              <Box>
+                <Text fontWeight="600" mb={2}>Copied Files ({files.length})</Text>
+                {files.length ? (
+                  <List spacing={2} style={{maxHeight:'400px', overflow:'auto'}} bg="blackAlpha.300" p={3} borderRadius="6px">
+                    {files.map((f,i)=>{
+                      const filePath = typeof f === 'string' ? f : (f.path || JSON.stringify(f))
+                      const fileSize = typeof f === 'object' && f.size ? ` (${formatSize(f.size)})` : ''
+                      const fileDate = typeof f === 'object' && f.date ? new Date(f.date).toLocaleString() : ''
+                      const thumbnail = typeof f === 'object' && f.thumbnail ? f.thumbnail : null
+                      
+                      // Build thumbnail URL
+                      const thumbnailUrl = thumbnail && job.data?.targetFolder 
+                        ? `/api/thumbnail/${encodeURIComponent(job.data.targetFolder.split('/').slice(-2).join('/'))}/${encodeURIComponent(thumbnail)}`
+                        : null
+                      
+                      return (
+                        <ListItem key={i}>
+                          <HStack spacing={3} align="start">
+                            {thumbnailUrl && (
+                              <Image 
+                                src={thumbnailUrl} 
+                                alt={filePath}
+                                boxSize="80px"
+                                objectFit="cover"
+                                borderRadius="4px"
+                                fallback={<Box boxSize="80px" bg="blackAlpha.500" borderRadius="4px" />}
+                              />
+                            )}
+                            <VStack align="start" flex={1} spacing={0}>
+                              <Text fontSize="sm" fontFamily="monospace">{filePath}{fileSize}</Text>
+                              {fileDate && <Text fontSize="xs" color="whiteAlpha.600">{fileDate}</Text>}
+                            </VStack>
+                          </HStack>
+                        </ListItem>
+                      )
+                    })}
+                  </List>
+                ) : <Text color="brand.muted">No files recorded</Text>}
+              </Box>
+            )}
 
             {(jobType === 'merge' || jobType === 'stabilize') && (merges.length > 0 || job.merge_json) && (
               <>
@@ -202,30 +204,107 @@ export default function JobModal({ isOpen, onClose, job: initialJob }){
                     <Text color="brand.muted">No merges were performed (files may have been skipped)</Text>
                   ) : (
                     <VStack align="stretch" spacing={3}>
-                      {merges.map((merge, idx) => (
-                      <Box key={idx} bg="blackAlpha.300" p={3} borderRadius="6px">
-                        <HStack justify="space-between" mb={2}>
-                          <Text fontWeight="600" color="purple.300">Output:</Text>
-                          <Text fontFamily="monospace" fontSize="sm">{merge.output}</Text>
-                        </HStack>
-                        <Box>
-                          <Text fontSize="sm" color="whiteAlpha.700" mb={1}>Merged from {merge.inputs?.length || 0} files:</Text>
-                          <List spacing={0.5} ml={4}>
-                            {(merge.inputs || []).map((input, i) => (
-                              <ListItem key={i}>
-                                <Text fontSize="xs" fontFamily="monospace" color="whiteAlpha.600">• {input}</Text>
-                              </ListItem>
-                            ))}
-                          </List>
-                        </Box>
-                        {merge.removed && merge.removed.length > 0 && (
-                          <Box mt={2}>
-                            <Text fontSize="sm" color="red.300">Removed {merge.removed.length} split file(s) after merge</Text>
+                      {merges.map((merge, idx) => {
+                        // Build thumbnail URL for the output video
+                        const outputName = merge.output?.replace('.mp4', '_thumb.jpg');
+                        // For merge jobs, thumbnails are in the output subfolder of the target folder
+                        // targetFolder might be like: /mnt/network_share/test/2025-12-04_19-38-00
+                        // thumbnail path should be: test/2025-12-04_19-38-00/output/filename_thumb.jpg
+                        const folderPath = job.data?.targetFolder?.split('/').slice(-2).join('/'); // e.g., "test/2025-12-04_19-38-00"
+                        const thumbnailUrl = outputName && folderPath
+                          ? `/api/thumbnail/${encodeURIComponent(folderPath)}/output/${encodeURIComponent(outputName)}`
+                          : null;
+                        
+                        return (
+                          <Box key={idx} bg="blackAlpha.300" p={3} borderRadius="6px">
+                            <HStack align="start" spacing={3} mb={2}>
+                              {thumbnailUrl && (
+                                <Image 
+                                  src={thumbnailUrl} 
+                                  alt={merge.output}
+                                  boxSize="120px"
+                                  objectFit="cover"
+                                  borderRadius="6px"
+                                  fallback={<Box boxSize="120px" bg="blackAlpha.500" borderRadius="6px" />}
+                                />
+                              )}
+                              <VStack align="start" flex={1} spacing={2}>
+                                <Box>
+                                  <Text fontSize="xs" color="whiteAlpha.600" mb={1}>Output:</Text>
+                                  <Text fontWeight="600" color="purple.300" fontFamily="monospace" fontSize="sm">{merge.output}</Text>
+                                </Box>
+                                <Box>
+                                  <Text fontSize="xs" color="whiteAlpha.600" mb={1}>Merged from {merge.inputs?.length || 0} files:</Text>
+                                  <List spacing={0.5}>
+                                    {(merge.inputs || []).slice(0, 3).map((input, i) => (
+                                      <ListItem key={i}>
+                                        <Text fontSize="xs" fontFamily="monospace" color="whiteAlpha.500">• {input}</Text>
+                                      </ListItem>
+                                    ))}
+                                    {(merge.inputs?.length || 0) > 3 && (
+                                      <Text fontSize="xs" color="whiteAlpha.400" ml={2}>
+                                        + {merge.inputs.length - 3} more...
+                                      </Text>
+                                    )}
+                                  </List>
+                                </Box>
+                                {merge.removed && merge.removed.length > 0 && (
+                                  <Text fontSize="xs" color="red.300">
+                                    🗑 Removed {merge.removed.length} split file(s)
+                                  </Text>
+                                )}
+                              </VStack>
+                            </HStack>
                           </Box>
-                        )}
-                      </Box>
-                    ))}
+                        );
+                      })}
                     </VStack>
+                  )}
+                </Box>
+              </>
+            )}
+
+            {jobType === 'stabilize' && merges.length === 0 && !job.merge_json && (
+              <>
+                <Divider borderColor="whiteAlpha.200" />
+                <Box>
+                  <Text fontWeight="600" mb={2}>Stabilized Videos ({files.length})</Text>
+                  {files.length > 0 ? (
+                    <List spacing={2} style={{maxHeight:'400px', overflow:'auto'}} bg="blackAlpha.300" p={3} borderRadius="6px">
+                      {files.map((f,i)=>{
+                        const filePath = typeof f === 'string' ? f : (f.path || JSON.stringify(f))
+                        const fileSize = typeof f === 'object' && f.size ? ` (${formatSize(f.size)})` : ''
+                        const thumbnail = typeof f === 'object' && f.thumbnail ? f.thumbnail : null
+                        
+                        // Build thumbnail URL for stabilized files in output folder
+                        const thumbnailUrl = thumbnail && job.data?.targetFolder 
+                          ? `/api/thumbnail/${encodeURIComponent(job.data.targetFolder.split('/').slice(-2).join('/'))}/${encodeURIComponent(thumbnail)}`
+                          : null
+                        
+                        return (
+                          <ListItem key={i}>
+                            <HStack spacing={3} align="start">
+                              {thumbnailUrl && (
+                                <Image 
+                                  src={thumbnailUrl} 
+                                  alt={filePath}
+                                  boxSize="80px"
+                                  objectFit="cover"
+                                  borderRadius="4px"
+                                  fallback={<Box boxSize="80px" bg="blackAlpha.500" borderRadius="4px" />}
+                                />
+                              )}
+                              <VStack align="start" flex={1} spacing={0}>
+                                <Text fontSize="sm" fontFamily="monospace">{filePath}{fileSize}</Text>
+                                <Badge colorScheme="green" fontSize="xs" mt={1}>Stabilized</Badge>
+                              </VStack>
+                            </HStack>
+                          </ListItem>
+                        )
+                      })}
+                    </List>
+                  ) : (
+                    <Text color="brand.muted">No stabilization details available</Text>
                   )}
                 </Box>
               </>

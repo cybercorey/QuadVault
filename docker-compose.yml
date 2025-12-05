@@ -43,10 +43,22 @@ services:
     restart: always
     privileged: true  # Required for mounting /dev/sdX inside container
     network_mode: host
+    # GPU support for gyroflow video stabilization (requires nvidia-docker)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility, video, graphics]
     environment:
       - NODE_ENV=production
       - REDIS_URL=redis://localhost:6379
       - FRONTEND_URL=http://localhost:3000
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+      - VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
     volumes:
       - /dev:/dev
       - /run/udev:/run/udev:ro

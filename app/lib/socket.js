@@ -63,4 +63,4 @@ function emitJobQueued(payload){
 
 function getRecentLogs(){ return logsBuffer.slice(-400) }
 
-module.exports = { setIo, emitLog, emitProgress, emitStorage, emitJobComplete, emitJobLog, emitJobQueued, getRecentLogs };
+module.exports = { setIo, emitLog, emitProgress, emitStorage, emitJobComplete, emitJobLog, emitJobQueued, getRecentLogs, pushLog };

@@ -45,22 +45,38 @@ services:
   worker:
     build:
       context: .
+      # Use worker/Dockerfile for GPU support (default)
+      # Use worker/Dockerfile.cpu for CPU-only (no stabilization)
       dockerfile: worker/Dockerfile
     container_name: quadvault-worker-dev
     restart: always
     privileged: true  # Required for mounting /dev/sdX inside container
     network_mode: host
+    # GPU support for gyroflow video stabilization (requires nvidia-docker)
+    # Remove this section when using Dockerfile.cpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility, video, graphics]
     environment:
       - NODE_ENV=development
       - REDIS_URL=redis://localhost:6379
       - FRONTEND_URL=http://localhost:3000
+      - GPU_SUPPORT=true  # Auto-set by Dockerfile, but can override
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+      - VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json
     volumes:
       - /dev:/dev
       - /run/udev:/run/udev:ro
       - network_share:/mnt/network_share
       - ./app/lib:/app/lib:ro
-      - ./worker:/worker  # Mount worker source for hot reload
-      - /worker/node_modules  # Protect node_modules
+      - ./worker/worker.js:/worker/worker.js  # Mount only source files, not binaries
+      - ./worker/merger.js:/worker/merger.js
       - ./config.json:/app/config.json:ro
     depends_on:
       redis:

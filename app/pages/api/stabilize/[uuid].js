@@ -31,30 +31,34 @@ export default async function handler(req, res){
       return res.status(404).json({error: 'Folder not found'});
     }
     
-    // Get deleteAfter option from request body
-    const deleteAfter = req.body?.deleteAfter || false;
+    // Get delete options from request body
+    const deleteAfterMerge = req.body?.deleteAfterMerge || false;
+    const deleteAfterStabilize = req.body?.deleteAfterStabilize || false;
     
-    // Create modified config with deleteAfter setting
+    // Create modified config with delete settings and stabilization flag
     const jobConfig = {
       ...device,
-      deleteAfterMerge: deleteAfter,
-      delete_after_merge: deleteAfter
+      deleteAfterMerge: deleteAfterMerge,
+      delete_after_merge: deleteAfterMerge,
+      deleteAfterStabilize: deleteAfterStabilize,
+      delete_after_stabilize: deleteAfterStabilize,
+      shouldStabilizeAfterMerge: true // Flag to queue stabilization after merge
     };
     
-    // Queue stabilize job
-    const job = await usbQueue.add('stabilize-videos', {
+    // Queue merge job first (which will then queue stabilize for the merged outputs)
+    const job = await usbQueue.add('merge-videos', {
       uuid,
       config: jobConfig,
       targetFolder: fullPath,
-      jobType: 'stabilize'
+      jobType: 'merge' // Keep as merge since this IS a merge job that will trigger stabilize
     }, {
-      jobId: `stabilize-${uuid}-${Date.now()}`,
+      jobId: `merge-${uuid}-${Date.now()}`,
       priority: 2
     });
     
-    emitLog({ timestamp: new Date(), msg: `Stabilize job queued for ${device.friendlyName || device.outputPath} (Job ID: ${job.id})`, type: 'info' });
-    emitJobQueued({ jobId: job.id, uuid, jobType: 'stabilize', deviceName: device.friendlyName || device.outputPath });
-    res.json({ success: true, message: 'Stabilize job queued', jobId: job.id });
+    emitLog({ timestamp: new Date(), msg: `Merge then stabilize job queued for ${device.friendlyName || device.outputPath} (Job ID: ${job.id})`, type: 'info' });
+    emitJobQueued({ jobId: job.id, uuid, jobType: 'merge', deviceName: device.friendlyName || device.outputPath });
+    res.json({ success: true, message: 'Merge and stabilize jobs queued', jobId: job.id });
   } catch(e) { 
     emitLog({ timestamp: new Date(), message: `Stabilize job failed: ${e.message || e}`, level: 'error' });
     res.status(500).json({ error: e.message || 'Failed to queue stabilize job' }); 

@@ -2,7 +2,7 @@ const Queue = require('bull');
 const io = require('socket.io-client');
 const fs = require('fs-extra');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 
 // Import shared libraries from frontend (mounted as volume)
 const { computeStorage, DEST_ROOT } = require('/app/lib/storage');
@@ -11,10 +11,39 @@ const { mergeFolder, stabilizeAndMergeFolder } = require('./merger');
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 const MOUNT_POINT = process.env.MOUNT_POINT || '/mnt/usb_incoming';
+const GPU_SUPPORT = process.env.GPU_SUPPORT === 'true';
 
 console.log('[Worker] Starting USB Automator Worker...');
 console.log('[Worker] Redis URL:', REDIS_URL);
 console.log('[Worker] Frontend URL:', FRONTEND_URL);
+console.log('[Worker] GPU Support:', GPU_SUPPORT ? 'ENABLED' : 'DISABLED');
+
+// Detect GPU capabilities at startup
+let GPU_AVAILABLE = false;
+if (GPU_SUPPORT) {
+    try {
+        // Check if gyroflow can detect GPU
+        const result = execSync('/worker/gyroflow --help 2>&1', { encoding: 'utf8', timeout: 5000 });
+        GPU_AVAILABLE = !result.includes('ERROR');
+        console.log('[Worker] GPU Detection:', GPU_AVAILABLE ? 'GPU Available' : 'GPU Not Detected');
+    } catch (error) {
+        console.log('[Worker] GPU Detection: Failed -', error.message);
+        GPU_AVAILABLE = false;
+    }
+} else {
+    console.log('[Worker] GPU Detection: Skipped (CPU-only build)');
+}
+
+// Export capabilities for API
+const WORKER_CAPABILITIES = {
+    gpu_support: GPU_SUPPORT,
+    gpu_available: GPU_AVAILABLE,
+    stabilization_enabled: GPU_SUPPORT && GPU_AVAILABLE,
+    merge_enabled: true,
+    sync_enabled: true
+};
+
+console.log('[Worker] Capabilities:', JSON.stringify(WORKER_CAPABILITIES, null, 2));
 
 // Connect to frontend's Socket.io server to emit progress updates
 const socket = io(FRONTEND_URL, {
@@ -25,6 +54,8 @@ const socket = io(FRONTEND_URL, {
 
 socket.on('connect', () => {
     console.log('[Worker] Connected to frontend Socket.io server');
+    // Emit capabilities on connect so frontend knows what's available
+    socket.emit('worker_capabilities', WORKER_CAPABILITIES);
 });
 
 socket.on('disconnect', () => {
@@ -35,8 +66,20 @@ socket.on('connect_error', (error) => {
     console.error('[Worker] Socket.io connection error:', error.message);
 });
 
-// Create Bull queue worker
-const usbQueue = new Queue('usb-jobs', REDIS_URL);
+// Respond to capability requests
+socket.on('request_capabilities', () => {
+    console.log('[Worker] Capability request received');
+    socket.emit('worker_capabilities', WORKER_CAPABILITIES);
+});
+
+// Create Bull queue worker with settings for long-running jobs
+const usbQueue = new Queue('usb-jobs', REDIS_URL, {
+    settings: {
+        lockDuration: 600000, // 10 minutes
+        lockRenewTime: 30000,  // Renew every 30 seconds
+        stalledInterval: 60000 // Check for stalled jobs every minute
+    }
+});
 
 console.log('[Worker] Queue configured, waiting for jobs...');
 
@@ -359,15 +402,22 @@ async function processDrive(deviceNode, uuid, config, job){
         socket.emit('job_complete', { id: job.id, status: 'Completed', uuid });
         
         // Queue merge/stabilize job after sync completes
+        // If stabilize is enabled, queue merge first, which will then queue stabilize
         const mergerType = config.mergerType || (config.mergerEnabled || config.merger_enabled ? 'merge' : 'none');
         if (mergerType !== 'none') {
-            const jobType = mergerType === 'stabilize' ? 'stabilize-videos' : 'merge-videos';
-            const jobIdPrefix = mergerType === 'stabilize' ? 'stabilize' : 'merge';
+            // For stabilization, we first merge, then stabilize the merged output
+            const shouldStabilize = mergerType === 'stabilize';
+            const initialJobType = 'merge-videos';
+            const jobIdPrefix = 'merge';
             
             try {
-                const queueJob = await usbQueue.add(jobType, {
+                const queueJob = await usbQueue.add(initialJobType, {
                     uuid,
-                    config,
+                    config: {
+                        ...config,
+                        // Pass flag to indicate stabilization should follow
+                        shouldStabilizeAfterMerge: shouldStabilize
+                    },
                     targetFolder: targetDir,
                     jobType: mergerType
                 }, {
@@ -375,7 +425,8 @@ async function processDrive(deviceNode, uuid, config, job){
                     priority: 2
                 });
                 
-                socket.emit('log', { timestamp: new Date(), msg: `Queued ${mergerType} job: ${queueJob.id}`, type: 'info' });
+                const action = shouldStabilize ? 'merge then stabilize' : 'merge';
+                socket.emit('log', { timestamp: new Date(), msg: `Queued ${action} job: ${queueJob.id}`, type: 'info' });
             } catch (error) {
                 socket.emit('log', { timestamp: new Date(), msg: `Failed to queue ${mergerType} job: ${error.message}`, type: 'error' });
             }
@@ -493,13 +544,58 @@ usbQueue.process('merge-videos', async (job) => {
         socket.emit('log', { timestamp: new Date(), msg: `Merge complete: ${result.flights} flight(s)`, type: 'info' });
         socket.emit('job_complete', { id: job.id, status: 'Completed', uuid });
         
+        // Calculate metrics for history display
+        const files_moved = result.merges.reduce((sum, m) => sum + (m.inputs?.length || 0), 0);
+        
+        // Get total size of output files
+        let total_size = 0;
+        for (const merge of result.merges) {
+            const outputPath = path.join(result.outputFolder, merge.output);
+            if (await fs.pathExists(outputPath)) {
+                const stats = await fs.stat(outputPath);
+                total_size += stats.size;
+            }
+        }
+        
+        // Calculate duration (convert milliseconds to seconds)
+        const duration_seconds = job.finishedOn && job.processedOn 
+            ? (job.finishedOn - job.processedOn) / 1000 
+            : 0;
+        
+        // If stabilization was requested, queue stabilize job now for the merged outputs
+        if (config.shouldStabilizeAfterMerge) {
+            if (!WORKER_CAPABILITIES.stabilization_enabled) {
+                socket.emit('log', { timestamp: new Date(), msg: `⚠️  Stabilization skipped: GPU support not available`, type: 'warn' });
+                addLog('Stabilization skipped: GPU support not available', 'warn');
+            } else {
+                try {
+                    const stabilizeJob = await usbQueue.add('stabilize-videos', {
+                        uuid,
+                        config,
+                        targetFolder: result.outputFolder, // Use output folder as target
+                        jobType: 'stabilize'
+                    }, {
+                        jobId: `stabilize-${uuid}-${Date.now()}`,
+                        priority: 2
+                    });
+                    
+                    socket.emit('log', { timestamp: new Date(), msg: `Queued stabilization job: ${stabilizeJob.id}`, type: 'info' });
+                } catch (error) {
+                    socket.emit('log', { timestamp: new Date(), msg: `Failed to queue stabilization job: ${error.message}`, type: 'error' });
+                }
+            }
+        }
+        
         return {
             success: true,
             uuid,
             device_name: jobName,
             status: 'Completed',
+            files_moved,
+            total_size,
+            duration_seconds,
             flights: result.flights,
-            merges: result.merges,
+            merge_json: JSON.stringify(result.merges),
             logs_json: JSON.stringify(logs)
         };
     } catch (error) {
@@ -522,46 +618,138 @@ usbQueue.process('stabilize-videos', async (job) => {
         socket.emit('job_log', { jobId: job.id, entry: { timestamp: Date.now(), msg, type } });
     };
     
+    // Check if stabilization is available
+    if (!WORKER_CAPABILITIES.stabilization_enabled) {
+        const errorMsg = GPU_SUPPORT 
+            ? 'GPU detected but not available - stabilization disabled'
+            : 'Stabilization not available in CPU-only build';
+        addLog(`⚠️  ${errorMsg}`, 'error');
+        socket.emit('log', { timestamp: new Date(), msg: errorMsg, type: 'error' });
+        socket.emit('job_complete', { id: job.id, status: 'Failed', uuid });
+        throw new Error(errorMsg);
+    }
+    
     try {
-        const deviceRoot = path.dirname(targetFolder);
+        // When called after merge, targetFolder is already the output folder with merged files
+        // Otherwise it's the source folder with original files
+        const isOutputFolder = path.basename(targetFolder) === 'output';
+        const deviceRoot = isOutputFolder ? path.dirname(targetFolder) : path.dirname(targetFolder);
+        const inputFolder = isOutputFolder ? targetFolder : targetFolder; // Stabilize what's in targetFolder
         const outputFolder = path.join(deviceRoot, 'output');
+        
         const mergerOpts = {
             outputFolder,
             name: config.mergerName || config.merger_name || path.basename(deviceRoot),
             removeSplits: !!(config.deleteAfterMerge || config.delete_after_merge),
+            deleteAfterStabilize: !!(config.deleteAfterStabilize || config.delete_after_stabilize),
             timeGap: config.mergerTimeGap || config.merger_time_gap || 10,
+            gyroflowPath: './gyroflow',
             logger: async (msg, type = 'info') => {
+                console.log('[WORKER LOGGER] Called with:', type, msg);
                 addLog(msg, type);
                 socket.emit('log', { timestamp: new Date(), msg, type });
+                console.log('[WORKER LOGGER] Emitted log via socket');
+            },
+            onProgress: (progressData) => {
+                // Calculate percentage based on video progress or flight merging progress
+                let percent, currentFile, moved, total;
                 
-                const progressMatch = msg.match(/Stabilizing (\d+) video/);
-                if (progressMatch) {
-                    const progressData = { 
-                        jobId: job.id, uuid, percent: 50, 
-                        currentFile: msg, 
-                        moved: 0, total: 1, 
-                        status: 'Stabilizing',
-                        deviceName: jobName
-                    };
-                    socket.emit('progress', progressData);
-                    await job.progress(progressData);
+                if (progressData.status === 'merging') {
+                    // During merge phase
+                    percent = Math.round(95 + (progressData.flight / progressData.totalFlights) * 5);
+                    currentFile = `Merging flight ${progressData.flight}/${progressData.totalFlights}`;
+                    moved = progressData.flight;
+                    total = progressData.totalFlights;
+                } else if (progressData.totalVideos) {
+                    // During stabilization phase
+                    percent = Math.round((progressData.video / progressData.totalVideos) * 95);
+                    currentFile = progressData.currentFile 
+                        ? `${progressData.currentFile} (${progressData.video}/${progressData.totalVideos}${progressData.sizeMB ? `, ${progressData.sizeMB}MB` : ''})`
+                        : `Video ${progressData.video}/${progressData.totalVideos}`;
+                    moved = progressData.video;
+                    total = progressData.totalVideos;
+                } else {
+                    // Fallback
+                    percent = 50;
+                    currentFile = `Processing flight ${progressData.flight || 1}`;
+                    moved = progressData.flight || 0;
+                    total = progressData.totalFlights || 1;
                 }
+                
+                const progressUpdate = {
+                    jobId: job.id,
+                    uuid,
+                    percent,
+                    currentFile,
+                    moved,
+                    total,
+                    status: progressData.status === 'stabilizing' ? 'Stabilizing' 
+                        : progressData.status === 'processing' ? 'Processing' 
+                        : progressData.status === 'merging' ? 'Merging'
+                        : progressData.status === 'completed' ? 'Completed'
+                        : 'Processing',
+                    deviceName: jobName
+                };
+                
+                console.log('[WORKER] Emitting progress:', progressUpdate);
+                socket.emit('progress', progressUpdate);
+                job.progress(progressUpdate).catch(err => 
+                    console.error('[WORKER] Failed to update job progress:', err.message)
+                );
             }
         };
         
         socket.emit('log', { timestamp: new Date(), msg: `Starting stabilization for ${jobName}`, type: 'info' });
-        const result = await stabilizeAndMergeFolder(targetFolder, mergerOpts);
+        const result = await stabilizeAndMergeFolder(inputFolder, mergerOpts);
         
         socket.emit('log', { timestamp: new Date(), msg: `Stabilization complete: ${result.flights} flight(s)`, type: 'info' });
         socket.emit('job_complete', { id: job.id, status: 'Completed', uuid });
+        
+        // Calculate metrics for history display
+        // For stabilization, count the stabilized files created
+        let files_moved = 0;
+        let total_size = 0;
+        const filesList = [];
+        
+        if (result.outputFolder && await fs.pathExists(result.outputFolder)) {
+            const stabilizedFiles = result.stabilizedFiles || [];
+            files_moved = stabilizedFiles.length;
+            
+            for (const fileName of stabilizedFiles) {
+                const filePath = path.join(result.outputFolder, fileName);
+                if (await fs.pathExists(filePath)) {
+                    const stats = await fs.stat(filePath);
+                    total_size += stats.size;
+                    
+                    // Check for thumbnail
+                    const thumbName = fileName.replace('.mp4', '_thumb.jpg');
+                    const thumbPath = path.join(result.outputFolder, thumbName);
+                    const hasThumbnail = await fs.pathExists(thumbPath);
+                    
+                    filesList.push({
+                        path: fileName,
+                        size: stats.size,
+                        thumbnail: hasThumbnail ? thumbName : null
+                    });
+                }
+            }
+        }
+        
+        // Calculate duration (convert milliseconds to seconds)
+        const duration_seconds = job.finishedOn && job.processedOn 
+            ? (job.finishedOn - job.processedOn) / 1000 
+            : 0;
         
         return {
             success: true,
             uuid,
             device_name: jobName,
             status: 'Completed',
+            files_moved,
+            total_size,
+            duration_seconds,
             flights: result.flights,
-            merges: result.merges,
+            files_json: JSON.stringify(filesList),
             logs_json: JSON.stringify(logs)
         };
     } catch (error) {

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Button, Badge, HStack, VStack, Text, Box, IconButton, Spinner } from '@chakra-ui/react'
-import { FiPlay, FiPause, FiEdit2, FiTrash2, FiPlus, FiHardDrive } from 'react-icons/fi'
+import { Button, Badge, HStack, VStack, Text, Box, IconButton, Spinner, useDisclosure } from '@chakra-ui/react'
+import { FiPlay, FiPause, FiEdit2, FiTrash2, FiPlus, FiHardDrive, FiClock } from 'react-icons/fi'
 import DeviceModal from './DeviceModal'
+import DeviceHistoryModal from './DeviceHistoryModal'
 import useSocket, { getSocket } from '../lib/useSocket'
 
 export default function DevicesList(){
@@ -13,6 +14,8 @@ export default function DevicesList(){
   const [storageTotal, setStorageTotal] = useState(null)
   const [storageLoading, setStorageLoading] = useState(false)
   const [activeJobs, setActiveJobs] = useState({}) // {uuid: {jobId, percent, currentFile}}
+  const [selectedDevice, setSelectedDevice] = useState(null)
+  const { isOpen: isHistoryOpen, onOpen: onHistoryOpen, onClose: onHistoryClose } = useDisclosure()
 
   useEffect(()=>{
     fetch('/api/config').then(r=>r.json()).then(json=>{
@@ -165,6 +168,16 @@ export default function DevicesList(){
                 </Box>
               </HStack>
               <HStack>
+                <Button 
+                  size="sm" 
+                  leftIcon={<FiClock />} 
+                  onClick={()=>{setSelectedDevice(dev); onHistoryOpen()}}
+                  variant="ghost"
+                  color="white"
+                  _hover={{ bg: 'whiteAlpha.200' }}
+                >
+                  History
+                </Button>
                 {!isRunning && <Button 
                   size="sm" 
                   leftIcon={<FiPlay />} 
@@ -233,6 +246,7 @@ export default function DevicesList(){
       </VStack>
 
       <DeviceModal isOpen={modalOpen} initial={editing} onClose={()=>setModalOpen(false)} onSave={onSave} />
+      <DeviceHistoryModal device={selectedDevice} isOpen={isHistoryOpen} onClose={onHistoryClose} />
     </Box>
   )
 }

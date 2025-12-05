@@ -177,6 +177,26 @@ export default function HistoryList(){
     }
   }
 
+  async function cancelJob(jobId){
+    if(!confirm('Cancel this job? It will be removed from the queue.')) return
+    try{
+      const r = await fetch('/api/cancel-job', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId })
+      })
+      const j = await r.json()
+      if(j.success){
+        toast({ title: 'Job cancelled', status: 'success', duration: 2000 })
+        load(page, limit)
+      } else {
+        toast({ title: 'Failed to cancel', description: j.error, status: 'error', duration: 3000 })
+      }
+    }catch(e){
+      toast({ title: 'Failed to cancel job', status: 'error', duration: 3000 })
+    }
+  }
+
   // Storage updates come via socket listener
 
   function openJob(job){ setSelected(job); setOpen(true) }
@@ -293,27 +313,38 @@ export default function HistoryList(){
                 {/* removed duplicate timestamp column */}
                 <Td isNumeric>
                   <HStack spacing={1} justify="flex-end">
-                    <Button 
-                      size="xs" 
-                      onClick={()=>openJob(r)} 
-                      variant="outline"
-                      color="white"
-                      borderColor="whiteAlpha.400"
-                      bg="whiteAlpha.100"
-                      _hover={{ bg: 'whiteAlpha.200', borderColor: 'whiteAlpha.600' }}
-                    >
-                      Details
-                    </Button>
-                    {!isRunning && (
-                      <IconButton
-                        size="xs"
-                        icon={<FiTrash2 />}
-                        onClick={()=>deleteJob(r.id)}
-                        variant="ghost"
-                        color="red.300"
-                        aria-label="Delete job"
-                        _hover={{ bg: 'red.900', color: 'red.200' }}
-                      />
+                    {(r.status === 'Queued' || isRunning) ? (
+                      <Button 
+                        size="xs" 
+                        onClick={()=>cancelJob(r.id)}
+                        colorScheme="orange"
+                        variant="outline"
+                      >
+                        Cancel
+                      </Button>
+                    ) : (
+                      <>
+                        <Button 
+                          size="xs" 
+                          onClick={()=>openJob(r)} 
+                          variant="outline"
+                          color="white"
+                          borderColor="whiteAlpha.400"
+                          bg="whiteAlpha.100"
+                          _hover={{ bg: 'whiteAlpha.200', borderColor: 'whiteAlpha.600' }}
+                        >
+                          Details
+                        </Button>
+                        <IconButton
+                          size="xs"
+                          icon={<FiTrash2 />}
+                          onClick={()=>deleteJob(r.id)}
+                          variant="ghost"
+                          color="red.300"
+                          aria-label="Delete job"
+                          _hover={{ bg: 'red.900', color: 'red.200' }}
+                        />
+                      </>
                     )}
                   </HStack>
                 </Td>

@@ -1,10 +1,29 @@
 const fs = require('fs-extra');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawn } = require('child_process');
 const ffprobe = require('ffprobe');
 const ffprobeStatic = require('ffprobe-static');
 
 const DEFAULT_TIME_GAP = 10; // max seconds gap between footage
+
+// Check if GPU is available for gyroflow
+function checkGPUAvailability() {
+    try {
+        // Check for NVIDIA GPU
+        execSync('nvidia-smi', { stdio: 'pipe' });
+        return { available: true, type: 'NVIDIA' };
+    } catch (e) {
+        // No NVIDIA GPU, check for other GPUs via vulkan/opengl
+        try {
+            execSync('vulkaninfo --summary', { stdio: 'pipe' });
+            return { available: true, type: 'Vulkan' };
+        } catch (e2) {
+            return { available: false, type: 'none' };
+        }
+    }
+}
+
+let gpuWarningShown = false;
 
 async function getVideoDuration(filePath) {
     return new Promise((resolve, reject) => {
@@ -341,96 +360,363 @@ async function mergeFolder(baseFolder, opts = {}) {
 }
 
 /**
- * Stabilize and merge DJI split video files in a folder using FFmpeg vid.stab
+ * Stabilize and merge DJI split video files in a folder using gyroflow binary
  * @param {string} baseFolder - Source folder to scan for videos
  * @param {object} opts - Options (same as mergeFolder)
  */
 async function stabilizeAndMergeFolder(baseFolder, opts = {}) {
+    console.log('[MERGER] stabilizeAndMergeFolder called for:', baseFolder);
     const outputFolder = opts.outputFolder || path.join(baseFolder, 'output');
     const name = opts.name || path.basename(baseFolder) || 'flight';
-    const logger = opts.logger || ((m, t = 'info') => console.log(`[${t}] ${m}`));
+    const originalLogger = opts.logger || ((m, t = 'info') => console.log(`[${t}] ${m}`));
+    const progressCallback = opts.onProgress || (() => {});
+    const deleteAfterStabilize = !!opts.deleteAfterStabilize;
+    console.log('[MERGER] Logger type:', typeof originalLogger);
+    // Wrap logger to handle both sync and async loggers WITHOUT blocking
+    const logger = (msg, type = 'info') => {
+        console.log('[MERGER LOG]', type, ':', msg);
+        const result = originalLogger(msg, type);
+        // Fire and forget - don't await async loggers
+        if (result && typeof result.then === 'function') {
+            result.catch(err => console.error('Logger error:', err.message));
+        }
+    };
     const timeGap = typeof opts.timeGap === 'number' ? opts.timeGap : DEFAULT_TIME_GAP;
+    const gyroflowPath = opts.gyroflowPath || './gyroflow';
+
+    console.log('[MERGER] About to check GPU...');
+    // Check GPU availability and warn if not available
+    if (!gpuWarningShown) {
+        const gpu = checkGPUAvailability();
+        console.log('[MERGER] GPU check result:', gpu);
+        if (!gpu.available) {
+            logger('⚠️  WARNING: No GPU detected! Gyroflow stabilization requires GPU acceleration.', 'warn');
+            logger('⚠️  GPU passthrough is required for Docker. See README for setup instructions.', 'warn');
+            logger('⚠️  Stabilization will likely fail without GPU support.', 'warn');
+        } else {
+            logger(`✓ GPU detected: ${gpu.type}`, 'info');
+        }
+        gpuWarningShown = true;
+    }
 
     logger(`Scanning ${baseFolder} for mp4 files to stabilize and merge (gap=${timeGap}s)`);
     
     await fs.ensureDir(outputFolder);
 
+    // Check if we're working with already-merged files (baseFolder is output folder)
+    const isOutputFolder = path.basename(baseFolder) === 'output';
+    
     const flights = await groupVideos(baseFolder, timeGap, false);
     logger(`Found ${flights.length} candidate flight(s) for stabilization`);
     
-    // Stabilize each flight's videos using FFmpeg vid.stab
+    // If working with pre-merged files from output folder, only stabilize those
+    if (isOutputFolder) {
+        logger(`Working with pre-merged files - stabilizing merged outputs directly`);
+        
+        // Get list of MP4 files in output folder directly (don't re-group)
+        const entries = await fs.readdir(baseFolder, { withFileTypes: true });
+        const videoFiles = entries
+            .filter(e => e.isFile() && path.extname(e.name).toLowerCase() === '.mp4' && !e.name.toLowerCase().includes('_stab'))
+            .map(e => path.join(baseFolder, e.name))
+            .sort();
+        
+        const totalVideos = videoFiles.length;
+        let processedVideos = 0;
+        const stabilizedFiles = [];
+        
+        for (const videoPath of videoFiles) {
+            const videoName = path.basename(videoPath, path.extname(videoPath));
+            // Don't add _stab if already has it
+            const stabilizedPath = videoName.endsWith('_stab') 
+                ? videoPath 
+                : path.join(outputFolder, `${videoName}_stab.mp4`);
+            
+            // Skip if already stabilized
+            if (await fs.pathExists(stabilizedPath)) {
+                logger(`Already stabilized: ${path.basename(stabilizedPath)}`);
+                processedVideos++;
+                stabilizedFiles.push(path.basename(stabilizedPath));
+                continue;
+            }
+            
+            processedVideos++;
+            try {
+                logger(`Stabilizing ${path.basename(videoPath)}...`);
+                progressCallback({ 
+                    video: processedVideos, 
+                    totalVideos: totalVideos,
+                    status: 'stabilizing',
+                currentFile: path.basename(videoPath)
+                });
+                
+                const outParams = `{ 'codec': 'H.264/AVC', 'bitrate': 50, 'use_gpu': true, 'audio': true, 'output_path': '${stabilizedPath}' }`;
+                const syncParams = `{ 'search_size': 3 }`;
+                const gyroflowCmd = `${gyroflowPath} "${videoPath}" --out-params "${outParams}" --sync-params "${syncParams}" --overwrite`;
+                
+                logger(`  → Loading video and detecting camera...`);
+                
+                await new Promise((resolve, reject) => {
+                    const gyroProcess = spawn('/bin/sh', ['-c', gyroflowCmd], {
+                        env: { ...process.env, QT_QPA_PLATFORM: 'offscreen' }
+                    });
+                    
+                    let stderr = '';
+                    let stdout = '';
+                    
+                    const progressInterval = setInterval(async () => {
+                        try {
+                            if (fs.existsSync(stabilizedPath)) {
+                                const stats = fs.statSync(stabilizedPath);
+                                const sizeMB = (stats.size / 1024 / 1024).toFixed(1);
+                                logger(`  → Processing... (${sizeMB} MB written)`);
+                            }
+                        } catch (e) {}
+                    }, 10000);
+                    
+                    gyroProcess.stdout.on('data', (data) => {
+                        stdout += data.toString();
+                        const lines = data.toString().trim().split('\n');
+                        lines.forEach(line => {
+                            if (line.includes('%') || line.includes('Processing') || line.includes('Rendering')) {
+                                logger(`  → ${line.trim()}`);
+                            }
+                        });
+                    });
+                    
+                    gyroProcess.stderr.on('data', (data) => {
+                        stderr += data.toString();
+                    });
+                    
+                    gyroProcess.on('close', (code) => {
+                        clearInterval(progressInterval);
+                        if (code === 0) {
+                            resolve();
+                        } else {
+                            const error = new Error(`Gyroflow failed with code ${code}`);
+                            error.stderr = stderr;
+                            error.stdout = stdout;
+                            reject(error);
+                        }
+                    });
+                    
+                    gyroProcess.on('error', (err) => {
+                        clearInterval(progressInterval);
+                        reject(err);
+                    });
+                });
+                
+                logger(`  ✓ Stabilized: ${path.basename(stabilizedPath)}`);
+                stabilizedFiles.push(path.basename(stabilizedPath));
+                
+                // Delete the original merged file if requested
+                if (deleteAfterStabilize && videoPath !== stabilizedPath) {
+                    try {
+                        await fs.remove(videoPath);
+                        logger(`  → Deleted merged file: ${path.basename(videoPath)}`);
+                    } catch (err) {
+                        logger(`  ⚠ Failed to delete merged file: ${err.message}`, 'warn');
+                    }
+                }
+            } catch (error) {
+                logger(`  ✗ Stabilization failed for ${path.basename(videoPath)}: ${error.message}`, 'error');
+                throw error;
+            }
+        }
+        
+        return { flights: totalVideos, outputFolder, merges: [], stabilizedFiles };
+    }
+    
+    // Count total videos for progress tracking
+    const totalVideos = flights.reduce((sum, f) => sum + f.filePaths.length, 0);
+    let processedVideos = 0;
+    
+    // Stabilize each video individually (original workflow)
     for (let i = 0; i < flights.length; i++) {
         const flight = flights[i];
-        logger(`Stabilizing ${flight.filePaths.length} video(s) for flight ${i + 1}/${flights.length}...`);
+        logger(`Processing flight ${i + 1}/${flights.length} (${flight.filePaths.length} video(s))`);
         
         for (const videoPath of flight.filePaths) {
+            processedVideos++;
             const videoName = path.basename(videoPath, path.extname(videoPath));
-            const stabilizedPath = path.join(outputFolder, `${videoName}_stabilized.mp4`);
-            const trf = path.join(outputFolder, `${videoName}.trf`);
+            const stabilizedPath = path.join(outputFolder, `${videoName}_stab.mp4`);
+            
+            // Skip if already stabilized
+            if (await fs.pathExists(stabilizedPath)) {
+                logger(`[${processedVideos}/${totalVideos}] Already stabilized: ${path.basename(stabilizedPath)}`);
+                progressCallback({ 
+                    video: processedVideos, 
+                    totalVideos, 
+                    flight: i + 1,
+                    totalFlights: flights.length,
+                    status: 'skipped' 
+                });
+                continue;
+            }
             
             try {
-                // Pass 1: Detect motion/shakiness
-                logger(`Pass 1/2: Detecting shakiness in ${path.basename(videoPath)}...`);
-                execSync(
-                    `ffmpeg -i "${videoPath}" -vf vidstabdetect=shakiness=10:accuracy=15:result="${trf}" -f null - -y`,
-                    { stdio: 'pipe' }
-                );
+                logger(`[${processedVideos}/${totalVideos}] Stabilizing ${path.basename(videoPath)}...`);
+                progressCallback({ 
+                    video: processedVideos, 
+                    totalVideos,
+                    flight: i + 1,
+                    totalFlights: flights.length, 
+                    status: 'stabilizing',
+                    currentFile: path.basename(videoPath)
+                });
                 
-                // Pass 2: Apply stabilization transform
-                logger(`Pass 2/2: Applying stabilization transform...`);
-                execSync(
-                    `ffmpeg -i "${videoPath}" -vf vidstabtransform=input="${trf}":zoom=0:smoothing=30,unsharp=5:5:0.8:3:3:0.4 -c:v libx264 -preset slow -crf 18 -c:a copy "${stabilizedPath}" -y`,
-                    { stdio: 'pipe' }
-                );
+                // Gyroflow uses TOML-style syntax for parameters (single quotes for keys/strings)
+                const outParams = `{ 'codec': 'H.264/AVC', 'bitrate': 50, 'use_gpu': true, 'audio': true, 'output_path': '${stabilizedPath}' }`;
+                const syncParams = `{ 'search_size': 3 }`;
+                const gyroflowCmd = `${gyroflowPath} "${videoPath}" --out-params "${outParams}" --sync-params "${syncParams}" --overwrite`;
                 
-                // Clean up transform file
-                if (await fs.pathExists(trf)) {
-                    await fs.remove(trf);
-                }
+                logger(`  → Loading video and detecting camera...`);
                 
-                logger(`Stabilized: ${path.basename(stabilizedPath)}`);
-            } catch (error) {
-                logger(`Stabilization failed for ${path.basename(videoPath)}: ${error.message}`, 'error');
+                // Use spawn to stream gyroflow output in real-time
+                await new Promise((resolve, reject) => {
+                    const gyroProcess = spawn('/bin/sh', ['-c', gyroflowCmd], {
+                        env: {
+                            ...process.env,
+                            QT_QPA_PLATFORM: 'offscreen'
+                        }
+                    });
+                    
+                    let stderr = '';
+                    let stdout = '';
+                    
+                    // Monitor output file size for progress indication
+                    const progressInterval = setInterval(async () => {
+                        try {
+                            if (fs.existsSync(stabilizedPath)) {
+                                const stats = fs.statSync(stabilizedPath);
+                                const sizeMB = (stats.size / 1024 / 1024).toFixed(1);
+                                logger(`  → Processing... (${sizeMB} MB written)`);
+                                progressCallback({ 
+                                    video: processedVideos, 
+                                    totalVideos,
+                                    flight: i + 1,
+                                    totalFlights: flights.length,
+                                    status: 'processing', 
+                                    sizeMB: parseFloat(sizeMB),
+                                    currentFile: path.basename(videoPath)
+                                });
+                            }
+                        } catch (e) {
+                            // Ignore errors during progress check
+                        }
+                    }, 10000);
+                    
+                    gyroProcess.stdout.on('data', (data) => {
+                        stdout += data.toString();
+                        const lines = data.toString().trim().split('\n');
+                        lines.forEach(line => {
+                            if (line.includes('%') || line.includes('Processing') || line.includes('Rendering')) {
+                                logger(`  → ${line.trim()}`);
+                            }
+                        });
+                    });
+                    
+                    gyroProcess.stderr.on('data', (data) => {
+                        stderr += data.toString();
+                        const lines = data.toString().trim().split('\n');
+                        lines.forEach(line => {
+                            if (line.includes('[ERROR]') || line.includes('error:')) {
+                                logger(`  ! ${line.trim()}`, 'warn');
+                            }
+                        });
+                    });
+                    
+                    gyroProcess.on('close', (code) => {
+                        clearInterval(progressInterval);
+                        if (code === 0) {
+                            resolve();
+                        } else {
+                            const error = new Error(`Gyroflow failed with code ${code}`);
+                            error.stderr = stderr;
+                            error.stdout = stdout;
+                            reject(error);
+                        }
+                    });
+                    
+                    gyroProcess.on('error', (err) => {
+                        clearInterval(progressInterval);
+                        reject(err);
+                    });
+                });
+                
+                logger(`  ✓ Stabilized: ${path.basename(stabilizedPath)}`);
+        } catch (error) {
+            // Log the full error output from gyroflow
+            const stderr = error.stderr ? error.stderr.toString() : '';
+            const stdout = error.stdout ? error.stdout.toString() : '';
+            
+            // Extract key error messages
+            const errorLines = stderr.split('\n').filter(l => l.includes('[ERROR]'));
+            if (errorLines.length > 0) {
+                logger(`  ✗ Gyroflow errors:`, 'error');
+                errorLines.forEach(line => logger(`    ${line.trim()}`, 'error'));
+            }
+            
+            // Check for specific error conditions
+            if (stderr.includes('No GPU') || stderr.includes('wgpu init error') || stderr.includes('OpenCL')) {
+                logger(`  ✗ GPU Error: Gyroflow requires GPU acceleration. Enable GPU passthrough in Docker.`, 'error');
+            } else if (stderr.includes('No lens profile')) {
+                logger(`  ✗ Camera Error: No lens profile found for this camera model.`, 'error');
+            } else {
+                logger(`  ✗ Stabilization failed: ${error.message}`, 'error');
+            }
+            
                 throw error;
             }
         }
     }
     
-    // After stabilization, merge the stabilized files
-    logger(`Merging ${flights.length} stabilized flight(s)...`);
-    const mergeResults = [];
-    
-    for (let i = 0; i < flights.length; i++) {
-        const flight = flights[i];
-        const stabilizedFiles = flight.filePaths.map(fp => {
-            const basename = path.basename(fp, path.extname(fp));
-            return path.join(outputFolder, `${basename}_stabilized.mp4`);
-        });
+    // After stabilization, merge the stabilized files per flight
+    // Skip merging if we're already working with merged files from output folder
+    if (!isOutputFolder && flights.length > 0) {
+        logger(`Merging ${flights.length} stabilized flight(s)...`);
         
-        // Check which stabilized files actually exist
-        const existingStabilized = [];
-        for (const sf of stabilizedFiles) {
-            if (await fs.pathExists(sf)) {
-                existingStabilized.push(sf);
+        for (let i = 0; i < flights.length; i++) {
+        const flight = flights[i];
+        const stabilizedFiles = [];
+        
+        // Collect stabilized files for this flight
+        for (const videoPath of flight.filePaths) {
+            const videoName = path.basename(videoPath, path.extname(videoPath));
+            const stabilizedPath = path.join(outputFolder, `${videoName}_stab.mp4`);
+            if (await fs.pathExists(stabilizedPath)) {
+                stabilizedFiles.push(stabilizedPath);
             }
         }
         
-        if (existingStabilized.length === 0) {
+        if (stabilizedFiles.length === 0) {
             logger(`No stabilized files found for flight ${i + 1}, skipping merge`, 'warn');
             continue;
         }
         
-        const outputFile = path.join(outputFolder, `${name}_flight_${i + 1}.mp4`);
+        // Generate output filename with _stab suffix
+        const outputFile = path.join(outputFolder, `${name}_flight_${i + 1}_stab.mp4`);
         
-        if (existingStabilized.length === 1) {
+        if (await fs.pathExists(outputFile)) {
+            logger(`Merged output already exists: ${path.basename(outputFile)}`);
+            continue;
+        }
+        
+        if (stabilizedFiles.length === 1) {
             // Just rename the single stabilized file
-            await fs.rename(existingStabilized[0], outputFile);
+            await fs.rename(stabilizedFiles[0], outputFile);
             logger(`Renamed single stabilized video to ${path.basename(outputFile)}`);
         } else {
-            // Merge multiple stabilized files
-            logger(`Merging ${existingStabilized.length} stabilized files for flight ${i + 1}...`);
+            // Merge multiple stabilized files using ffmpeg concat
+            logger(`Merging ${stabilizedFiles.length} stabilized files for flight ${i + 1}...`);
+            progressCallback({ 
+                flight: i + 1,
+                totalFlights: flights.length,
+                status: 'merging',
+                files: stabilizedFiles.length
+            });
+            
             const tempList = path.join(outputFolder, `concat_${i}.txt`);
-            const listContent = existingStabilized.map(f => `file '${f}'`).join('\n');
+            const listContent = stabilizedFiles.map(f => `file '${f}'`).join('\n');
             await fs.writeFile(tempList, listContent);
             
             try {
@@ -438,31 +724,16 @@ async function stabilizeAndMergeFolder(baseFolder, opts = {}) {
                     `ffmpeg -f concat -safe 0 -i "${tempList}" -c copy "${outputFile}" -y`,
                     { stdio: 'pipe' }
                 );
-                logger(`Merged flight ${i + 1}: ${path.basename(outputFile)}`);
+                logger(`✓ Merged flight ${i + 1}: ${path.basename(outputFile)}`);
                 
-                // Remove temp list and stabilized splits if removeSplits is true
+                // Remove temp list
                 await fs.remove(tempList);
+                
+                // Optionally remove individual stabilized files if requested
                 if (opts.removeSplits) {
-                    for (const sf of existingStabilized) {
-                        if (await fs.pathExists(sf)) {
-                            await fs.remove(sf);
-                            logger(`Removed stabilized split: ${path.basename(sf)}`);
-                        }
-                    }
-                    // Also remove original splits and thumbnails if requested
-                    for (const p of flight.filePaths) {
-                        if (await fs.pathExists(p)) {
-                            await fs.remove(p);
-                            logger(`Removed original split: ${path.basename(p)}`);
-                            
-                            // Remove associated thumbnail
-                            const ext = path.extname(p);
-                            const thumbPath = p.replace(ext, '_thumb.jpg');
-                            if (await fs.pathExists(thumbPath)) {
-                                await fs.remove(thumbPath);
-                                logger(`Removed thumbnail ${path.basename(thumbPath)}`);
-                            }
-                        }
+                    for (const sf of stabilizedFiles) {
+                        await fs.remove(sf);
+                        logger(`Removed individual stabilized file: ${path.basename(sf)}`);
                     }
                 }
             } catch (error) {
@@ -472,14 +743,18 @@ async function stabilizeAndMergeFolder(baseFolder, opts = {}) {
             }
         }
         
-        mergeResults.push({
-            output: path.basename(outputFile),
-            inputs: existingStabilized.map(f => path.basename(f)),
-            removed: opts.removeSplits ? flight.filePaths.map(f => path.basename(f)) : []
+        progressCallback({ 
+            flight: i + 1,
+            totalFlights: flights.length,
+            status: 'completed',
+            output: path.basename(outputFile)
         });
     }
+    } else if (isOutputFolder) {
+        logger(`Skipping merge step - stabilizing pre-merged files from output folder`);
+    }
     
-    return { flights: flights.length, outputFolder, merges: mergeResults };
+    return { flights: flights.length, outputFolder };
 }
 
 module.exports = { mergeFolder, stabilizeAndMergeFolder };

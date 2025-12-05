@@ -141,7 +141,7 @@ export default function Header(){
             transition="all 0.2s"
             _hover={{ transform: 'scale(1.1)' }}
           />
-          USB Automator
+          QuadVault
         </Heading>
         <Badge 
           bgGradient={purpleGradients[selectedGradient]}

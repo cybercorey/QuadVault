@@ -111,7 +111,7 @@ export default function App({ Component, pageProps }){
     <ChakraProvider theme={theme}>
       <Head>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>USB Automator</title>
+        <title>QuadVault</title>
         <link rel="icon" href="/logo.svg" type="image/svg+xml" />
         <link rel="icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAB/UlEQVRYR+2Xv2sTQRTHP7eJQ0KpUiIhQkIhKIoWsoW2NvY2NgYWJjY2FgYIhY2PhhYWFgY2JhY0NCIikpKm9Jf0H/skl3Zt5JmZ25jz5s7szO6cOXPm3HNf3HPOd873POd+8AqKioqaydctwKjgaP4DXwKOgEfBA2Yr7otXVarVYjH4SnwF/gS2At2itVqvVrtfrl4Br4OMoH0KfAFcDlwBlAG2mLq+vp6jiOQCvwAlgHXAV2i/19bW5hKq1SqVjsfjcbotVqtFp1OpxCNRgNRqNfr9frtZrNZnEwmEwmC+wAtoF7we4B+wHpgY2NjJCMEwDCMRCKRSASQUhRFUZIkEqlQq/X4/B5/Pp/P5/P5fC4XC7FYrEYDAYfD4fEolE2Gw2IwzDMAySJEmSJPF4vFqt9sFgMBgMhmEwm83m8/mEw2GwWCwWiqIISZKkWCxWq9W+Z8+eJRKJRCKRSCTy+/14PM4L3AIWAHcBW4BTWC6XKysrMZ/PcRwH7AIWAHcBV4C77vd7pdFo1Gg0AgH6/X6/X4zDMPgOSJJNJpPDbDbDbDYDCMT6/v6+jgAIpFIpFIJBKJjzAMgzAMw/8BY4CPgA/CysqKqqpUKpXgcrksJEny3W63a7VaPR6PRCAQwHq9blKpVNoF9gB3gWuAO+BxYLFYDAYDAYjFYjH8Tn8Bb4CVgHPAD+Cn0DewH+G83G43Q6nQwA7gZuB+4Pr169fT8bCwsKqqqqeA2+TyaT9kRERETkF/AAAH8Ab2XPWYwAAAABJRU5ErkJggg==" type="image/png" />
         {/* fonts are loaded from _document.js to avoid Next.js runtime warning */}

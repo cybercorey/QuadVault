@@ -7,8 +7,10 @@ gyroflow
 mp4-merge
 **/mp4_merge
 **/gyroflow
+**/squashfs-root/
 worker/mp4_merge
 worker/gyroflow
+worker/squashfs-root/
 app/mp4_merge
 app/gyroflow
 
@@ -42,3 +44,18 @@ yarn-debug.log*
 *~
 .vscode/
 .idea/
+
+# Test data and output
+test/
+**/output/
+*.mp4
+*.MP4
+*.jpg
+*.jpeg
+
+# Docker volumes
+volumes/
+
+# Backup files
+*.bak
+*.backup

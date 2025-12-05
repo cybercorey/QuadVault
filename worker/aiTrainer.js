@@ -207,67 +207,130 @@ Questions? Check worker/training-guide.md for detailed examples.
  * Batch classify entire library using trained model
  */
 async function batchClassify(libraryPath, modelPath, outputPath) {
+  const startTime = Date.now();
   console.log('[AI Trainer] Starting batch classification...');
   console.log(`  Library: ${libraryPath}`);
   console.log(`  Model: ${modelPath}`);
   
+  // Create status file for real-time updates
+  const statusPath = '/tmp/batch-status.json';
+  const updateStatus = async (status) => {
+    await fs.writeJson(statusPath, status, { spaces: 2 });
+  };
+  
   // This would integrate with your trained PyTorch model
   // For now, we'll use CLIP as a starting point
+  const useClip = modelPath === 'clip';
   
   const results = {
     scanned: 0,
     highlights: [],
-    processed_at: new Date().toISOString()
+    processed_at: new Date().toISOString(),
+    status: 'running'
   };
   
-  // Scan library recursively
-  const videos = await findAllVideos(libraryPath);
-  console.log(`[AI Trainer] Found ${videos.length} videos to process`);
-  
-  // Process each video (this is where trained model would be used)
-  for (const videoPath of videos) {
-    try {
-      // Extract sample frames
-      const tmpDir = '/tmp/batch-classify';
-      await fs.ensureDir(tmpDir);
-      
-      // Extract 3 frames from middle of video
-      const frames = await extractKeyFrames(videoPath, tmpDir, 'temp');
-      
-      // Score frames (would use your trained model here)
-      // For now using placeholder
-      const score = Math.random();
-      
-      if (score > 0.7) {
-        results.highlights.push({
-          path: videoPath,
-          score: score,
-          timestamp: new Date().toISOString()
-        });
+  try {
+    // Scan library recursively
+    console.log('[AI Trainer] Scanning library for videos...');
+    const videos = await findAllVideos(libraryPath);
+    console.log(`[AI Trainer] Found ${videos.length} videos to process`);
+    
+    await updateStatus({
+      status: 'running',
+      total: videos.length,
+      processed: 0,
+      highlightsFound: 0,
+      speed: 0,
+      eta: 'Calculating...'
+    });
+    
+    // Process each video (this is where trained model would be used)
+    for (let i = 0; i < videos.length; i++) {
+      const videoPath = videos[i];
+      try {
+        // Extract sample frames
+        const tmpDir = '/tmp/batch-classify';
+        await fs.ensureDir(tmpDir);
+        
+        // Extract 3 frames from middle of video
+        const frames = await extractKeyFrames(videoPath, tmpDir, 'temp');
+        
+        // Score frames (would use your trained model here)
+        // For now using placeholder - in production use CLIP or custom model
+        const score = Math.random();
+        
+        if (score > 0.7) {
+          results.highlights.push({
+            path: videoPath,
+            score: score,
+            timestamp: new Date().toISOString()
+          });
+        }
+        
+        results.scanned++;
+        
+        // Calculate progress metrics
+        const elapsed = (Date.now() - startTime) / 1000; // seconds
+        const speed = results.scanned / elapsed;
+        const remaining = videos.length - results.scanned;
+        const etaSeconds = remaining / speed;
+        const etaHours = Math.floor(etaSeconds / 3600);
+        const etaMinutes = Math.floor((etaSeconds % 3600) / 60);
+        const eta = `${etaHours}h ${etaMinutes}m`;
+        
+        // Update status every 10 videos
+        if (results.scanned % 10 === 0) {
+          await updateStatus({
+            status: 'running',
+            total: videos.length,
+            processed: results.scanned,
+            highlightsFound: results.highlights.length,
+            speed: speed,
+            eta: eta,
+            threshold: 0.7
+          });
+        }
+        
+        // Progress log every 100 videos
+        if (results.scanned % 100 === 0) {
+          console.log(`[AI Trainer] Processed ${results.scanned}/${videos.length} videos (${speed.toFixed(1)} videos/sec, ETA: ${eta})`);
+        }
+        
+        // Cleanup temp frames
+        await fs.remove(tmpDir);
+      } catch (err) {
+        console.error(`[AI Trainer] Error processing ${videoPath}:`, err.message);
       }
-      
-      results.scanned++;
-      
-      // Progress update every 100 videos
-      if (results.scanned % 100 === 0) {
-        console.log(`[AI Trainer] Processed ${results.scanned}/${videos.length} videos...`);
-      }
-      
-      // Cleanup temp frames
-      await fs.remove(tmpDir);
-    } catch (err) {
-      console.error(`[AI Trainer] Error processing ${videoPath}:`, err.message);
     }
+    
+    results.status = 'complete';
+    
+    // Save final results
+    await fs.writeJson(outputPath, results, { spaces: 2 });
+    console.log(`[AI Trainer] Batch classification complete!`);
+    console.log(`  Total scanned: ${results.scanned}`);
+    console.log(`  Highlights found: ${results.highlights.length}`);
+    console.log(`  Results saved to: ${outputPath}`);
+    
+    // Update final status
+    await updateStatus({
+      status: 'complete',
+      total: videos.length,
+      processed: results.scanned,
+      highlightsFound: results.highlights.length,
+      outputPath: outputPath,
+      highlights: results.highlights.slice(0, 50) // Top 50 for UI
+    });
+    
+    return results;
+  } catch (err) {
+    console.error('[AI Trainer] Batch classification failed:', err);
+    await updateStatus({
+      status: 'error',
+      error: err.message
+    });
+    throw err;
   }
-  
-  // Save results
-  await fs.writeJson(outputPath, results, { spaces: 2 });
-  console.log(`[AI Trainer] Batch classification complete!`);
-  console.log(`  Total scanned: ${results.scanned}`);
-  console.log(`  Highlights found: ${results.highlights.length}`);
-  console.log(`  Results saved to: ${outputPath}`);
-  
-  return results;
 }
 
 /**

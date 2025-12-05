@@ -1,5 +1,5 @@
 import { HStack, Heading, Spacer, Button, Badge, Box, useDisclosure } from '@chakra-ui/react'
-import { FiHardDrive, FiHome, FiClock, FiDatabase, FiSettings } from 'react-icons/fi'
+import { FiHardDrive, FiHome, FiClock, FiDatabase, FiSettings, FiCpu } from 'react-icons/fi'
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/router'
 import { purpleGradients } from '../lib/chakraTheme'
@@ -154,6 +154,30 @@ export default function Header(){
               py={0.5}
             >
               ✨
+            </Badge>
+          </Button>
+          <Button 
+            size="sm" 
+            leftIcon={<FiCpu />} 
+            onClick={() => router.push('/ai-training')}
+            variant={router.pathname === '/ai-training' ? 'solid' : 'ghost'}
+            bgGradient={router.pathname === '/ai-training' ? purpleGradients[selectedGradient] : undefined}
+            color={router.pathname === '/ai-training' ? 'white' : 'whiteAlpha.700'}
+            _hover={router.pathname === '/ai-training' ? { opacity: 0.9 } : { bg: 'whiteAlpha.100', color: 'white' }}
+            position="relative"
+          >
+            AI Training
+            <Badge 
+              position="absolute" 
+              top="-2" 
+              right="-2" 
+              fontSize="8px" 
+              colorScheme="cyan"
+              borderRadius="full"
+              px={1.5}
+              py={0.5}
+            >
+              🤖
             </Badge>
           </Button>
           <Button 

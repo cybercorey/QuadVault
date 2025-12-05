@@ -29,16 +29,28 @@ import {
   Stat,
   StatLabel,
   StatNumber,
+  Progress,
+  Spinner,
+  Flex,
+  AspectRatio,
 } from '@chakra-ui/react';
-import { AddIcon, DeleteIcon, CheckIcon } from '@chakra-ui/icons';
+import { AddIcon, DeleteIcon, CheckIcon, StarIcon, CloseIcon, ArrowForwardIcon } from '@chakra-ui/icons';
 
 export default function LabelManager({ onLabelsReady }) {
   const toast = useToast();
+  const [mode, setMode] = useState('assisted'); // 'assisted' or 'manual'
   const [highlightPaths, setHighlightPaths] = useState(['']);
   const [normalPaths, setNormalPaths] = useState(['']);
   const [savePath, setSavePath] = useState('/media/labels.json');
   const [existingLabels, setExistingLabels] = useState(null);
   const [loading, setLoading] = useState(false);
+  
+  // Assisted mode state
+  const [videos, setVideos] = useState([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [scanning, setScanning] = useState(false);
+  const [labeled, setLabeled] = useState({ highlights: [], normal: [] });
+  const [currentVideo, setCurrentVideo] = useState(null);
 
   // Load existing labels if they exist
   useEffect(() => {

@@ -39,7 +39,7 @@ import {
   Spinner,
 } from '@chakra-ui/react';
 import { CheckCircleIcon, WarningIcon, TimeIcon, StarIcon } from '@chakra-ui/icons';
-import LabelManager from './LabelManager';
+import AssistedLabeling from './AssistedLabeling';
 
 export default function AITraining() {
   const toast = useToast();
@@ -211,7 +211,7 @@ export default function AITraining() {
       <VStack spacing={6} align="stretch">
         <Box>
           <Heading size="lg" mb={2}>AI Auto-Highlight Training</Heading>
-          <Text color="gray.400">
+          <Text color="whiteAlpha.700">
             Train custom models on your drone footage or use CLIP for instant highlights
           </Text>
         </Box>
@@ -226,26 +226,26 @@ export default function AITraining() {
           </TabList>
 
           <TabPanels>
-            {/* Tab 0: Label Manager */}
+            {/* Tab 0: Assisted Labeling */}
             <TabPanel>
-              <LabelManager onLabelsReady={(path) => setLabelsPath(path)} />
+              <AssistedLabeling onComplete={(path) => setLabelsPath(path)} />
             </TabPanel>
 
             {/* Tab 1: Dataset Preparation */}
             <TabPanel>
               <VStack spacing={6} align="stretch">
-                <Alert status="info" variant="left-accent">
+                <Alert status="info" variant="left-accent" bg="blue.900" borderColor="blue.600" borderWidth="1px">
                   <AlertIcon />
                   <Box>
-                    <AlertTitle>Step 1: Prepare Training Dataset</AlertTitle>
-                    <AlertDescription>
+                    <AlertTitle color="blue.100">Step 1: Prepare Training Dataset</AlertTitle>
+                    <AlertDescription color="blue.200">
                       Create labels.json in your Samba mount with highlight and normal clips, 
                       then extract frames for training.
                     </AlertDescription>
                   </Box>
                 </Alert>
 
-                <Card bg="whiteAlpha.50">
+                <Card bg="whiteAlpha.100" borderColor="whiteAlpha.300" borderWidth="1px">
                   <CardHeader>
                     <Heading size="md">Labels File Format</Heading>
                   </CardHeader>
@@ -262,7 +262,7 @@ export default function AITraining() {
   ]
 }`}
                     </Code>
-                    <Text mt={3} fontSize="sm" color="gray.400">
+                    <Text mt={3} fontSize="sm" color="whiteAlpha.700">
                       Save this as <Code>/media/labels.json</Code> in your Samba mount
                     </Text>
                   </CardBody>
@@ -281,7 +281,7 @@ export default function AITraining() {
                 </FormControl>
 
                 {datasetStatus && (
-                  <Card bg="whiteAlpha.50">
+                  <Card bg="whiteAlpha.100" borderColor="whiteAlpha.300" borderWidth="1px">
                     <CardBody>
                       <SimpleGrid columns={3} spacing={4}>
                         <Stat>
@@ -311,7 +311,7 @@ export default function AITraining() {
                       {datasetStatus.status === 'running' && (
                         <Box mt={4}>
                           <Progress value={datasetStatus.progress} colorScheme="purple" />
-                          <Text mt={2} fontSize="sm" color="gray.400">
+                          <Text mt={2} fontSize="sm" color="whiteAlpha.700">
                             {datasetStatus.message}
                           </Text>
                         </Box>
@@ -371,7 +371,7 @@ export default function AITraining() {
                 </Alert>
 
                 {trainingStatus && (
-                  <Card bg="whiteAlpha.50">
+                  <Card bg="whiteAlpha.100" borderColor="whiteAlpha.300" borderWidth="1px">
                     <CardBody>
                       <SimpleGrid columns={2} spacing={4}>
                         <Stat>
@@ -409,7 +409,7 @@ export default function AITraining() {
                             value={(trainingStatus.currentEpoch / trainingStatus.totalEpochs) * 100} 
                             colorScheme="purple" 
                           />
-                          <Text mt={2} fontSize="sm" color="gray.400">
+                          <Text mt={2} fontSize="sm" color="whiteAlpha.700">
                             Epoch {trainingStatus.currentEpoch} - Loss: {trainingStatus.loss?.toFixed(4)}
                           </Text>
                         </Box>
@@ -424,7 +424,7 @@ export default function AITraining() {
                   </Card>
                 )}
 
-                <Card bg="whiteAlpha.50">
+                <Card bg="whiteAlpha.100" borderColor="whiteAlpha.300" borderWidth="1px">
                   <CardBody>
                     <Heading size="sm" mb={3}>Training Requirements</Heading>
                     <List spacing={2}>
@@ -505,7 +505,7 @@ export default function AITraining() {
                 </FormControl>
 
                 {batchStatus && (
-                  <Card bg="whiteAlpha.50">
+                  <Card bg="whiteAlpha.100" borderColor="whiteAlpha.300" borderWidth="1px">
                     <CardBody>
                       <SimpleGrid columns={3} spacing={4}>
                         <Stat>
@@ -542,7 +542,7 @@ export default function AITraining() {
                             value={(batchStatus.processed / batchStatus.total) * 100} 
                             colorScheme="purple" 
                           />
-                          <Text mt={2} fontSize="sm" color="gray.400">
+                          <Text mt={2} fontSize="sm" color="whiteAlpha.700">
                             Estimated time remaining: {batchStatus.eta || 'Calculating...'}
                           </Text>
                         </Box>
@@ -563,7 +563,7 @@ export default function AITraining() {
                   </Card>
                 )}
 
-                <Card bg="whiteAlpha.50">
+                <Card bg="whiteAlpha.100" borderColor="whiteAlpha.300" borderWidth="1px">
                   <CardBody>
                     <Heading size="sm" mb={3}>Performance Estimates</Heading>
                     <List spacing={2}>
@@ -624,14 +624,14 @@ export default function AITraining() {
                 <Heading size="md">Training Results & Highlights</Heading>
 
                 {batchStatus?.status === 'complete' && batchStatus.highlights && (
-                  <Card bg="whiteAlpha.50">
+                  <Card bg="whiteAlpha.100" borderColor="whiteAlpha.300" borderWidth="1px">
                     <CardHeader>
                       <Heading size="sm">Top Highlights ({batchStatus.highlights.length})</Heading>
                     </CardHeader>
                     <CardBody>
                       <VStack align="stretch" spacing={2} maxH="400px" overflowY="auto">
                         {batchStatus.highlights.slice(0, 50).map((highlight, idx) => (
-                          <HStack key={idx} justify="space-between" p={2} bg="whiteAlpha.50" borderRadius="md">
+                          <HStack key={idx} justify="space-between" p={2} bg="whiteAlpha.100" borderColor="whiteAlpha.300" borderWidth="1px" borderRadius="md">
                             <Text fontSize="sm" noOfLines={1} flex={1}>
                               {highlight.path.split('/').pop()}
                             </Text>
@@ -647,7 +647,7 @@ export default function AITraining() {
 
                 {trainingStatus?.status === 'complete' && (
                   <SimpleGrid columns={2} spacing={4}>
-                    <Card bg="whiteAlpha.50">
+                    <Card bg="whiteAlpha.100" borderColor="whiteAlpha.300" borderWidth="1px">
                       <CardBody>
                         <Stat>
                           <StatLabel>Model Accuracy</StatLabel>
@@ -656,7 +656,7 @@ export default function AITraining() {
                         </Stat>
                       </CardBody>
                     </Card>
-                    <Card bg="whiteAlpha.50">
+                    <Card bg="whiteAlpha.100" borderColor="whiteAlpha.300" borderWidth="1px">
                       <CardBody>
                         <Stat>
                           <StatLabel>Training Epochs</StatLabel>
